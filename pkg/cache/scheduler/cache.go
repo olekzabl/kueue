@@ -577,11 +577,13 @@ func (c *Cache) addOrUpdateWorkload(log logr.Logger, w *kueue.Workload) bool {
 func (c *Cache) UpdateWorkload(log logr.Logger, oldWl, newWl *kueue.Workload) error {
 	c.Lock()
 	defer c.Unlock()
+	log.V(2).Info("Updating workload", "workload", newWl.Name)
 	if workload.HasQuotaReservation(oldWl) {
 		cq := c.hm.ClusterQueue(oldWl.Status.Admission.ClusterQueue)
 		if cq == nil {
 			return errors.New("old ClusterQueue doesn't exist")
 		}
+		log.V(2).Info("Deleting workload", "workload", newWl.Name)
 		cq.deleteWorkload(log, oldWl)
 	}
 	c.cleanupAssumedState(log, oldWl)

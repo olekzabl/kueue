@@ -451,9 +451,12 @@ func (c *clusterQueue) deleteWorkload(log logr.Logger, w *kueue.Workload) {
 	k := workload.Key(w)
 	wi, exist := c.Workloads[k]
 	if !exist {
+		log.V(2).Info("Exiting as workload does not exist", "workload", w.Name)
 		return
 	}
+	log.V(2).Info("Subtracting from queue usage", "workload", w.Name)
 	c.updateWorkloadUsage(log, wi, subtract)
+	log.V(2).Info("Subtracted from queue usage", "workload", w.Name, "usage", wi.FlavorResourceUsage())
 	if c.podsReadyTracking && !apimeta.IsStatusConditionTrue(w.Status.Conditions, kueue.WorkloadPodsReady) {
 		c.WorkloadsNotReady.Delete(k)
 	}
