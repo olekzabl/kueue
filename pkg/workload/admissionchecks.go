@@ -84,18 +84,19 @@ func SyncAdmittedCondition(w *kueue.Workload, now time.Time) bool {
 
 // resetChecksOnEviction sets all AdmissionChecks to Pending
 func resetChecksOnEviction(w *kueue.Workload, now time.Time) {
-	checks := w.Status.AdmissionChecks
-	for i := range checks {
-		if checks[i].State == kueue.CheckStatePending {
-			continue
-		}
-		checks[i] = kueue.AdmissionCheckState{
-			Name:               checks[i].Name,
-			State:              kueue.CheckStatePending,
-			LastTransitionTime: metav1.NewTime(now),
-			Message:            "Reset to Pending after eviction. Previously: " + string(checks[i].State),
-		}
-	}
+	w.Status.AdmissionChecks = nil
+	// checks := w.Status.AdmissionChecks
+	// for i := range checks {
+	// 	if checks[i].State == kueue.CheckStatePending {
+	// 		continue
+	// 	}
+	// 	checks[i] = kueue.AdmissionCheckState{
+	// 		Name:               checks[i].Name,
+	// 		State:              kueue.CheckStatePending,
+	// 		LastTransitionTime: metav1.NewTime(now),
+	// 		Message:            "Reset to Pending after eviction. Previously: " + string(checks[i].State),
+	// 	}
+	// }
 }
 
 // SetAdmissionCheckState - adds or updates newCheck in the provided checks list.
