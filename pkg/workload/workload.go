@@ -843,6 +843,11 @@ func ApplyAdmissionStatus(ctx context.Context, c client.Client, w *kueue.Workloa
 	return ApplyAdmissionStatusPatch(ctx, c, wlCopy)
 }
 
+func ApplyAndReturnAdmissionStatus(ctx context.Context, c client.Client, w *kueue.Workload, strict bool, clk clock.Clock) (*kueue.Workload, error) {
+	wlCopy := PrepareWorkloadPatch(w, strict, clk)
+	return wlCopy, ApplyAdmissionStatusPatch(ctx, c, wlCopy)
+}
+
 func PrepareWorkloadPatch(w *kueue.Workload, strict bool, clk clock.Clock) *kueue.Workload {
 	wlCopy := BaseSSAWorkload(w, strict)
 	admissionStatusPatch(w, wlCopy)
