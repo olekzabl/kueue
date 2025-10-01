@@ -1136,6 +1136,7 @@ func (r *Request) Do(ctx context.Context) Result {
 	err := r.request(ctx, func(req *http.Request, resp *http.Response) {
 		result = r.transformResponse(ctx, resp, req)
 	})
+	logger.V(1).Info(fmt.Sprintf("HTTP host: %s\n", r.URL().Host))
 	if err != nil {
 		return Result{err: err, logger: logger}
 	}

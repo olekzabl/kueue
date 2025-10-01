@@ -18,6 +18,7 @@ package provisioning
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/google/go-cmp/cmp/cmpopts"
@@ -1592,15 +1593,15 @@ var _ = ginkgo.Describe("Provisioning with scheduling", ginkgo.Ordered, ginkgo.C
 	})
 
 	ginkgo.When("A workload is preempted from a flavor which uses an admission check", func() {
-		ginkgo.It("Should be successfully re-admitted on another flavor without an admission check", func() {
+		ginkgo.FIt("Should be successfully re-admitted on another flavor without an admission check", func() {
 			ginkgo.By("Set up ClusterQueue and LocalQueue", func() {
 				cq = testing.MakeClusterQueue("cluster-queue").
 					Preemption(kueue.ClusterQueuePreemption{
 						WithinClusterQueue: kueue.PreemptionPolicyLowerPriority,
 					}).
 					ResourceGroup(
-						*testing.MakeFlavorQuotas(rf1.Name).Resource(corev1.ResourceCPU, "0.75").Obj(),
-						*testing.MakeFlavorQuotas(rf2.Name).Resource(corev1.ResourceCPU, "0.5").Obj(),
+						*testing.MakeFlavorQuotas(rf1.Name).Resource(corev1.ResourceCPU, "0.75").Resource(corev1.ResourceMemory, "5G").Obj(),
+						*testing.MakeFlavorQuotas(rf2.Name).Resource(corev1.ResourceCPU, "0.5").Resource(corev1.ResourceMemory, "5G").Obj(),
 					).
 					AdmissionCheckStrategy(kueue.AdmissionCheckStrategyRule{
 						Name:      kueue.AdmissionCheckReference(ac1.Name),
@@ -1618,7 +1619,8 @@ var _ = ginkgo.Describe("Provisioning with scheduling", ginkgo.Ordered, ginkgo.C
 			ginkgo.By("submit the Job", func() {
 				jobBuilder := testingjob.MakeJob("job1", ns.Name).
 					Queue(kueue.LocalQueueName(lq.Name)).
-					Request(corev1.ResourceCPU, "500m")
+					Request(corev1.ResourceCPU, "500m").
+					Request(corev1.ResourceMemory, "220M")
 				job1 := jobBuilder.Obj()
 				util.MustCreate(ctx, k8sClient, job1)
 				ginkgo.DeferCleanup(func() {
@@ -1663,14 +1665,21 @@ var _ = ginkgo.Describe("Provisioning with scheduling", ginkgo.Ordered, ginkgo.C
 				}, util.Timeout, util.Interval).Should(gomega.Succeed())
 			})
 
+			// ginkgo.By("sleeping", func() {
+			// 	time.Sleep(30 * time.Second)
+			// })
+
 			ginkgo.By("await for the Workload to be Admitted on flavor-1", func() {
 				gomega.Eventually(func(g gomega.Gomega) {
+					var pid = os.Getpid()
+					var _ = pid
 					gomega.Expect(k8sClient.Get(ctx, wlKey, &wlObj)).Should(gomega.Succeed())
 					g.Expect(workload.Status(&wlObj)).To(gomega.Equal(workload.StatusAdmitted))
 					g.Expect(wlObj.Status.Admission.PodSetAssignments).Should(gomega.HaveLen(1))
 
 					var expectedFlavors = map[corev1.ResourceName]kueue.ResourceFlavorReference{
-						corev1.ResourceCPU: flavor1Ref,
+						corev1.ResourceCPU:    flavor1Ref,
+						corev1.ResourceMemory: flavor1Ref,
 					}
 					g.Expect(wlObj.Status.Admission.PodSetAssignments[0].Flavors).To(gomega.Equal(expectedFlavors))
 				}, util.Timeout, util.Interval).Should(gomega.Succeed())
