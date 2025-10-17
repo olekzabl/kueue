@@ -3,6 +3,7 @@ package tas
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -216,39 +217,49 @@ func (n *TrieNode) setSplits(L int) (gain int) {
 		return 0
 	}
 	n.split = true
+	gain += n.size - L*(len(n.children)-1)
 	for _, child := range n.children {
 		gain += child.setSplits(L)
 	}
 	return gain
 }
 
-func (n *TrieNode) getStringsInternal(history string, res *[]string) {
+func (n *TrieNode) getStringsInternal(history string, dir direction, res *[]string) {
 	if n.hasWord {
-		*res = append(*res, history)
+		if dir == prefixDir {
+			*res = append(*res, history)
+		} else {
+			*res = append(*res, reverse(history))
+		}
 	}
 	for c, child := range n.children {
-		child.getStringsInternal(history+string(c), res)
+		child.getStringsInternal(history+string(c), dir, res)
 	}
 }
 
-func (n *TrieNode) getStrings() []string {
+func (n *TrieNode) getStrings(dir direction) []string {
 	res := make([]string, 0, n.size)
-	n.getStringsInternal("", &res)
+	n.getStringsInternal("", dir, &res)
 	return res
 }
 
-func (n *TrieNode) getGroups(history string) (res []*PrefixBasedGroup) {
+func (n *TrieNode) getGroups(history string, dir direction, alsoAdd string) (res []*PrefixSuffixBasedGroup) {
 	if !n.split {
-		return []*PrefixBasedGroup{
-			{
-				NodeNamePrefix: history,
-				NodeNames:      n.getStrings(),
-				Counts:         ones(n.size),
-			},
+		res := &PrefixSuffixBasedGroup{
+			NodeNames: n.getStrings(dir),
+			Counts:    ones(n.size),
 		}
+		if dir == prefixDir {
+			res.NodeNamePrefix = history
+			res.NodeNameSuffix = alsoAdd
+		} else {
+			res.NodeNameSuffix = reverse(history)
+			res.NodeNamePrefix = alsoAdd
+		}
+		return []*PrefixSuffixBasedGroup{res}
 	} else {
 		for c, child := range n.children {
-			res = append(res, child.getGroups(history+string(c))...)
+			res = append(res, child.getGroups(history+string(c), dir, alsoAdd)...)
 		}
 		return
 	}
@@ -302,7 +313,7 @@ type CompactV1Gzip struct {
 	Counts           []int32
 }
 
-func compactV1Gzip(nodes []string) any {
+func compactV1GzipHex(nodes []string) any {
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	bytes, _ := json.Marshal(nodes)
@@ -311,6 +322,20 @@ func compactV1Gzip(nodes []string) any {
 	return &CompactV1Gzip{
 		Levels:           hostOnly,
 		NodeNamesGzipped: fmt.Sprintf("%x", buf.String()),
+		Counts:           ones(len(nodes)),
+	}
+}
+
+func compactV1GzipBase64(nodes []string) any {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	bytes, _ := json.Marshal(nodes)
+	zw.Write(bytes)
+	zw.Close()
+
+	return &CompactV1Gzip{
+		Levels:           hostOnly,
+		NodeNamesGzipped: base64.StdEncoding.EncodeToString(buf.Bytes()),
 		Counts:           ones(len(nodes)),
 	}
 }
@@ -347,9 +372,69 @@ func elasticPrefix(L int) encoding {
 			root.add([]byte(name))
 		}
 		root.setSplits(L)
-		return &PrefixBased{
+		return &PrefixSuffixBased{
 			Levels: hostOnly,
-			Groups: root.getGroups(""),
+			Groups: root.getGroups("", prefixDir, ""),
+		}
+	}
+}
+
+func elasticPrefixOrSuffix(L int) encoding {
+	return func(nodes []string) any {
+		rootP := newTrieNode()
+		for _, name := range nodes {
+			rootP.add([]byte(name))
+		}
+		gainP := rootP.setSplits(L)
+
+		rootS := newTrieNode()
+		for _, name := range nodes {
+			rootS.add([]byte(reverse(name)))
+		}
+		gainS := rootS.setSplits(L)
+
+		// fmt.Printf("Gains: %d, %d\n", gainP, gainS)
+		if gainP >= gainS {
+			return &PrefixSuffixBased{
+				Levels: hostOnly,
+				Groups: rootP.getGroups("", prefixDir, ""),
+			}
+		} else {
+			return &PrefixSuffixBased{
+				Levels: hostOnly,
+				Groups: rootS.getGroups("", suffixDir, ""),
+			}
+		}
+	}
+}
+
+func elasticSymmetricPlusSingle(L int, withPunct bool) encoding {
+	return func(nodes []string) any {
+		suffix := singleSuffix(nodes, withPunct)
+		rootP := newTrieNode()
+		for _, name := range nodes {
+			rootP.add([]byte(name[:len(name)-len(suffix)]))
+		}
+		gainP := rootP.setSplits(L)
+
+		prefix := singlePrefix(nodes, withPunct)
+		rootS := newTrieNode()
+		for _, name := range nodes {
+			rootS.add([]byte(reverse(name[len(prefix):])))
+		}
+		gainS := rootS.setSplits(L)
+
+		// fmt.Printf("Gains: %d, %d\n", gainP, gainS)
+		if gainP >= gainS {
+			return &PrefixSuffixBased{
+				Levels: hostOnly,
+				Groups: rootP.getGroups("", prefixDir, suffix),
+			}
+		} else {
+			return &PrefixSuffixBased{
+				Levels: hostOnly,
+				Groups: rootS.getGroups("", suffixDir, prefix),
+			}
 		}
 	}
 }
@@ -645,9 +730,12 @@ func naiveSuffixInternal(nodes []string, C int) (res PrefixSuffixBased, suffixLe
 	return
 }
 
-func singlePrefixAndSuffix(nodes []string) any {
+func isPunct(b byte) bool {
+	return b == '.' || b == '-'
+}
+
+func singlePrefix(nodes []string, withPunct bool) string {
 	prefix := nodes[0]
-	suffix := nodes[0]
 	for i, name := range nodes {
 		if i == 0 {
 			continue
@@ -656,14 +744,30 @@ func singlePrefixAndSuffix(nodes []string) any {
 		if n < len(prefix) {
 			prefix = prefix[:n]
 		}
-		if n < len(suffix) {
-			suffix = suffix[len(suffix)-n:]
-		}
 		for j := 0; j < len(prefix); j++ {
 			if name[j] != prefix[j] {
 				prefix = prefix[:j]
 				break
 			}
+		}
+		if withPunct {
+			for len(prefix) > 0 && !isPunct(prefix[len(prefix)-1]) {
+				prefix = prefix[:len(prefix)-1]
+			}
+		}
+	}
+	return prefix
+}
+
+func singleSuffix(nodes []string, withPunct bool) string {
+	suffix := nodes[0]
+	for i, name := range nodes {
+		if i == 0 {
+			continue
+		}
+		n := len(name)
+		if n < len(suffix) {
+			suffix = suffix[len(suffix)-n:]
 		}
 		for j := 1; j <= len(suffix); j++ {
 			if name[n-j] != suffix[len(suffix)-j] {
@@ -671,19 +775,32 @@ func singlePrefixAndSuffix(nodes []string) any {
 				break
 			}
 		}
+		if withPunct {
+			for len(suffix) > 0 && !isPunct(suffix[0]) {
+				suffix = suffix[1:]
+			}
+		}
 	}
-	roots := make([]string, 0, len(nodes))
-	for _, name := range nodes {
-		roots = append(roots, name[len(prefix):len(name)-len(suffix)])
-	}
-	return PrefixSuffixBased{
-		Levels: hostOnly,
-		Groups: []*PrefixSuffixBasedGroup{{
-			NodeNamePrefix: prefix,
-			NodeNameSuffix: suffix,
-			NodeNames:      roots,
-			Counts:         ones(len(nodes)),
-		}},
+	return suffix
+}
+
+func singlePrefixAndSuffix(withPunct bool) encoding {
+	return func(nodes []string) any {
+		prefix := singlePrefix(nodes, withPunct)
+		suffix := singleSuffix(nodes, withPunct)
+		roots := make([]string, 0, len(nodes))
+		for _, name := range nodes {
+			roots = append(roots, name[len(prefix):len(name)-len(suffix)])
+		}
+		return PrefixSuffixBased{
+			Levels: hostOnly,
+			Groups: []*PrefixSuffixBasedGroup{{
+				NodeNamePrefix: prefix,
+				NodeNameSuffix: suffix,
+				NodeNames:      roots,
+				Counts:         ones(len(nodes)),
+			}},
+		}
 	}
 }
 
@@ -739,15 +856,19 @@ var (
 	}
 
 	encodings = []Named[encoding]{
-		{"Original", original},
-		{"Parallel V1", compactV1},
-		{"Parallel V1 + GZIP->hex", compactV1Gzip},
+		// {"Original", original},
+		// {"Parallel V1", compactV1},
+		// {"Parallel V1 + GZIP->hex", compactV1GzipHex},
+		// {"Parallel V1 + GZIP->base64", compactV1GzipBase64},
 		{"EP-60", elasticPrefix(60)},
-		{"UP-50", uniformPrefix(50)},
-		{"UP-50 | US-50", uniformPrefixOrSuffix(50)},
-		{"UP-50 | NS-9", uniformPrefixOrNaiveSuffix(50, 9)},
-		{"1P & 1S", singlePrefixAndSuffix},
-		{"UP-50 & 1S", uniformPrefixAndSingleSuffix(50)},
+		{"EP-60 | ES-60", elasticPrefixOrSuffix(60)},
+		{"(EP-60 & 1pS) | (1pP & ES-60)", elasticSymmetricPlusSingle(60, true)},
+		// {"UP-50", uniformPrefix(50)},
+		// {"UP-50 | US-50", uniformPrefixOrSuffix(50)},
+		// {"UP-50 | NS-9", uniformPrefixOrNaiveSuffix(50, 9)},
+		// {"1P & 1S", singlePrefixAndSuffix(false)},
+		// {"1Pp & 1Sp", singlePrefixAndSuffix(true)},
+		// {"UP-50 & 1S", uniformPrefixAndSingleSuffix(50)},
 	}
 )
 
@@ -772,7 +893,7 @@ func TestEncoding(t *testing.T) {
 }
 
 func testDesc(encDesc, nDesc string, nodePools int) string {
-	return fmt.Sprintf("%23s | %13s | %4d pools", encDesc, nDesc, nodePools)
+	return fmt.Sprintf("%26s | %13s | %4d pools", encDesc, nDesc, nodePools)
 }
 
 func TestLimits(t *testing.T) {
