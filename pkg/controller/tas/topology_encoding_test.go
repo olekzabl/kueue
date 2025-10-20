@@ -1107,24 +1107,20 @@ var (
 	}
 
 	encodings = []Named[encoding]{
-		// {"Original", original},
-		// {"Parallel V1", compactV1},
-		// {"Parallel V1 + GZIP->hex", compactV1GzipHex},
-		// {"Parallel V1 + GZIP->base64", compactV1GzipBase64},
-		// {"EP-60", elasticPrefix(60)},
-		// {"EP-60 | ES-60", elasticPrefixOrSuffix(60)},
-		// {"(EP-60 & 1pS) | (1pP & ES-60)", elasticSymmetricPlusSingle(60, true)},
-		// {"fEpE-50", encoding(func(nodes []string) any {
-		// 	res, _ := fastElasticPunctuatedPrefixInternal(50)(nodes, "")
-		// 	return res
-		// })},
+		{"Original", original},
+		{"Parallel V1", compactV1},
+		{"Parallel V1 + GZIP->hex", compactV1GzipHex},
+		{"Parallel V1 + GZIP->base64", compactV1GzipBase64},
+		{"EP-60", elasticPrefix(60)},
+		{"EP-60 | ES-60", elasticPrefixOrSuffix(60)},
+		{"(EP-60 & 1pS) | (1pP & ES-60)", elasticSymmetricPlusSingle(60, true)},
 		{"(fEpP-50 & 1pS) | (1pP & fEpS-50)", fastElasticPunctuatedPrefixInternal(50).withSingleSuffix(true).orMirror()},
-		// {"UP-50", uniformPrefix(50)},
-		// {"UP-50 | US-50", uniformPrefixOrSuffix(50)},
-		// {"UP-50 | NS-9", uniformPrefixOrNaiveSuffix(50, 9)},
-		// {"1P & 1S", singlePrefixAndSuffix(false)},
-		// {"1Pp & 1Sp", singlePrefixAndSuffix(true)},
-		// {"UP-50 & 1S", uniformPrefixAndSingleSuffix(50)},
+		{"UP-50", uniformPrefix(50)},
+		{"UP-50 | US-50", uniformPrefixOrSuffix(50)},
+		{"UP-50 | NS-9", uniformPrefixOrNaiveSuffix(50, 9)},
+		{"1P & 1S", singlePrefixAndSuffix(false)},
+		{"1Pp & 1Sp", singlePrefixAndSuffix(true)},
+		{"UP-50 & 1S", uniformPrefixAndSingleSuffix(50)},
 	}
 )
 
