@@ -439,6 +439,219 @@ func elasticSymmetricPlusSingle(L int, withPunct bool) encoding {
 	}
 }
 
+// --- fEp (Fast Elastic Punctuated) ---
+
+type internalPrefixMethod func([]string, string) (PrefixSuffixBased, int)
+type internalMethod func(nodes []string) (res PrefixSuffixBased, value int)
+
+func (g *PrefixSuffixBasedGroup) rotate() *PrefixSuffixBasedGroup {
+	names := []string{}
+	for _, n := range g.NodeNames {
+		names = append(names, reverse(n))
+	}
+	return &PrefixSuffixBasedGroup{
+		NodeNamePrefix: reverse(g.NodeNameSuffix),
+		NodeNameSuffix: reverse(g.NodeNamePrefix),
+		NodeNames:      names,
+		Counts:         ones(len(names)),
+	}
+}
+
+func (p PrefixSuffixBased) rotate() PrefixSuffixBased {
+	groups := []*PrefixSuffixBasedGroup{}
+	for _, g := range p.Groups {
+		groups = append(groups, g.rotate())
+	}
+	return PrefixSuffixBased{
+		Levels: p.Levels,
+		Groups: groups,
+	}
+}
+
+func (f internalMethod) wrapSym(dir direction) internalMethod {
+	return func(nodes []string) (PrefixSuffixBased, int) {
+		var nodesCopy []string
+		if dir == prefixDir {
+			nodesCopy = nodes[:]
+		} else {
+			nodesCopy = make([]string, 0, len(nodes))
+			for _, node := range nodes {
+				nodesCopy = append(nodesCopy, reverse(node))
+			}
+		}
+
+		res, value := f(nodesCopy)
+
+		if dir == prefixDir {
+			return res, value
+		} else {
+			return res.rotate(), value
+		}
+	}
+}
+
+func (f internalPrefixMethod) withSingleSuffix(withPunct bool) internalMethod {
+	return func(nodes []string) (PrefixSuffixBased, int) {
+		suffix := singleSuffix(nodes, withPunct)
+		return f(nodes, suffix)
+	}
+}
+
+func (f internalMethod) orMirror() encoding {
+	pre := f.wrapSym(prefixDir)
+	suf := f.wrapSym(suffixDir)
+	return func(nodes []string) any {
+		resP, gainP := pre(nodes)
+		resS, gainS := suf(nodes)
+		// fmt.Printf("gains: %d, %d\n", gainP, gainS)
+		// fmt.Printf("--- RES-P ---\n")
+		// fmt.Printf("%s\n", jsonPretty(resP, 0))
+		// fmt.Printf("--- RES-S ---\n")
+		// fmt.Printf("%s\n", jsonPretty(resS, 0))
+		if gainP >= gainS {
+			return resP
+		} else {
+			return resS
+		}
+	}
+}
+
+func (f internalMethod) mirror() encoding {
+	suf := f.wrapSym(suffixDir)
+	return func(nodes []string) any {
+		resS, _ := suf(nodes)
+		return resS
+	}
+}
+
+func fastElasticPunctuatedPrefixInternal(L int) internalPrefixMethod {
+	return func(nodes []string, commonSuffix string) (res PrefixSuffixBased, gain int) {
+		r := PrefixSuffixBased{
+			Levels: hostOnly,
+			Groups: []*PrefixSuffixBasedGroup{},
+		}
+		totalGain := 0
+		names := nodes
+
+		for len(names) > 0 {
+			lenNames := len(names)
+			sort.Strings(names)
+			postponedNames := []string{}
+			lastFlipAt := make([]int, 300)
+			maxPunctChars := 0
+			lastEmitted := -1
+			punctPos := make([]int, 300)
+
+			for i := 1; i <= len(names); i++ {
+				prev := names[i-1][:len(names[i-1])-len(commonSuffix)] + "$"
+				var curr string
+				if i == len(names) {
+					for k := 1; k < len(lastFlipAt); k++ {
+						if lastFlipAt[k] > 0 {
+							curr = names[i-1][:punctPos[k]] + "*"
+						}
+					}
+					if curr == "" {
+						curr = "*"
+					}
+				} else {
+					curr = names[i][:len(names[i])-len(commonSuffix)] + "$"
+				}
+				// fmt.Printf("FEPP: prev: %q\n", prev)
+				// fmt.Printf("      curr: %q\n", curr)
+				// fmt.Printf("      lastE: %d\n", lastEmitted)
+				punctChars := 0
+				for j := 0; j < min(len(curr), len(prev)); j++ {
+					if curr[j] == prev[j] {
+						if isPunct(prev[j]) {
+							punctChars++
+							punctPos[punctChars] = j
+							if punctChars > maxPunctChars {
+								maxPunctChars = punctChars
+								lastFlipAt[maxPunctChars] = lastFlipAt[maxPunctChars-1]
+							}
+						}
+					} else {
+						punctPrefixLen := punctChars
+						for punctPrefixLen < maxPunctChars-1 && lastFlipAt[punctPrefixLen+1] == lastFlipAt[punctPrefixLen] {
+							punctPrefixLen++
+						}
+						if punctPrefixLen < maxPunctChars {
+							punctPrefixLen++
+						}
+						start := lastFlipAt[punctChars]
+						// if lastEmitted > start {
+						// 	start = lastEmitted + 1
+						// }
+						segmentLength := i - start
+						prefixLen := punctPos[punctPrefixLen] + 1
+						gain := segmentLength*prefixLen - (L + prefixLen)
+						// fmt.Printf("Gain: %d, segment: %d-%d @%d->%d\n", gain, start, i, punctChars, punctPrefixLen)
+						if gain > 0 {
+							totalGain += gain
+							if lastEmitted < start-1 {
+								for k := lastEmitted + 1; k < start; k++ {
+									postponedNames = append(postponedNames, names[k])
+								}
+							}
+							group := &PrefixSuffixBasedGroup{
+								NodeNamePrefix: prev[:prefixLen],
+								NodeNameSuffix: commonSuffix,
+								Counts:         ones(segmentLength),
+							}
+							for k := start; k < i; k++ {
+								group.NodeNames = append(group.NodeNames, names[k][prefixLen:len(names[k])-len(commonSuffix)])
+							}
+							r.Groups = append(r.Groups, group)
+							// fmt.Printf("APPENDING, %v\n", group)
+							lastEmitted = i - 1
+							for k := 1; k < punctChars; k++ {
+								lastFlipAt[k] = i
+							}
+						} else if i == lenNames {
+							// fmt.Printf("EOI!\n")
+							for k := lastEmitted + 1; k < lenNames; k++ {
+								postponedNames = append(postponedNames, names[k])
+							}
+						}
+						for k := punctChars; k <= maxPunctChars; k++ {
+							lastFlipAt[k] = i
+						}
+						break
+					}
+				}
+				// fmt.Printf("LFat: %v\n", lastFlipAt[1:maxPunctChars+1])
+				// fmt.Printf("ppos: %v\n", punctPos[1:maxPunctChars+1])
+			}
+			// fmt.Printf("Postponed [%d]: %v\n", len(postponedNames), postponedNames)
+			names = postponedNames
+			if len(names) == lenNames {
+				// fmt.Printf("Postponed = all; appending all as 1 group\n")
+				if lenNames == 1 {
+					r.Groups = append(r.Groups, &PrefixSuffixBasedGroup{
+						NodeNames: []string{names[0]},
+						Counts:    ones(1),
+					})
+				} else {
+					prefix := singlePrefix(names, true)
+					ns := []string{}
+					for _, n := range names {
+						ns = append(ns, n[len(prefix):len(n)-len(commonSuffix)])
+					}
+					r.Groups = append(r.Groups, &PrefixSuffixBasedGroup{
+						NodeNamePrefix: prefix,
+						NodeNameSuffix: commonSuffix,
+						NodeNames:      ns,
+						Counts:         ones(len(names)),
+					})
+				}
+				names = []string{}
+			}
+		}
+		return r, totalGain
+	}
+}
+
 // --- Uniform prefix ---
 
 type direction int
@@ -835,7 +1048,45 @@ func uniformPrefixOrNaiveSuffix(L int, C int) encoding {
 	}
 }
 
-// --- Uniform prefix or suffix
+// === VERIFYING RESULTS
+
+func verify(input []string, output any) {
+	n := len(input)
+	outStrings := make([]string, 0, n)
+	switch v := output.(type) {
+	case PrefixBased:
+		for _, g := range v.Groups {
+			for _, n := range g.NodeNames {
+				outStrings = append(outStrings, g.NodeNamePrefix+n)
+			}
+		}
+	case PrefixSuffixBased:
+		for _, g := range v.Groups {
+			for _, n := range g.NodeNames {
+				outStrings = append(outStrings, g.NodeNamePrefix+n+g.NodeNameSuffix)
+			}
+		}
+	default:
+		return
+	}
+	sort.Strings(input)
+	sort.Strings(outStrings)
+	// if len(outStrings) != n {
+	// 	panic(fmt.Sprintf("Got %d output strings, expected %d", len(outStrings), n))
+	// }
+	minLen := min(n, len(outStrings))
+	maxLen := max(n, len(outStrings))
+	for i := range maxLen {
+		if i >= minLen {
+			panic(fmt.Sprintf("excessive %d-th entry on one of the sides", i))
+		}
+		if outStrings[i] != input[i] {
+			fmt.Printf("INPUT [len %d]: %v\n", len(input), input)
+			fmt.Printf("OUTPUT [len %d]:\n%s\n", len(outStrings), jsonPretty(output, 0))
+			panic(fmt.Sprintf("%d-th string: got %q, expected %q", i, outStrings[i], input[i]))
+		}
+	}
+}
 
 // === RUNNING SIMULATIONS ===
 
@@ -860,9 +1111,14 @@ var (
 		// {"Parallel V1", compactV1},
 		// {"Parallel V1 + GZIP->hex", compactV1GzipHex},
 		// {"Parallel V1 + GZIP->base64", compactV1GzipBase64},
-		{"EP-60", elasticPrefix(60)},
-		{"EP-60 | ES-60", elasticPrefixOrSuffix(60)},
-		{"(EP-60 & 1pS) | (1pP & ES-60)", elasticSymmetricPlusSingle(60, true)},
+		// {"EP-60", elasticPrefix(60)},
+		// {"EP-60 | ES-60", elasticPrefixOrSuffix(60)},
+		// {"(EP-60 & 1pS) | (1pP & ES-60)", elasticSymmetricPlusSingle(60, true)},
+		// {"fEpE-50", encoding(func(nodes []string) any {
+		// 	res, _ := fastElasticPunctuatedPrefixInternal(50)(nodes, "")
+		// 	return res
+		// })},
+		{"(fEpP-50 & 1pS) | (1pP & fEpS-50)", fastElasticPunctuatedPrefixInternal(50).withSingleSuffix(true).orMirror()},
 		// {"UP-50", uniformPrefix(50)},
 		// {"UP-50 | US-50", uniformPrefixOrSuffix(50)},
 		// {"UP-50 | NS-9", uniformPrefixOrNaiveSuffix(50, 9)},
@@ -886,14 +1142,38 @@ func TestEncoding(t *testing.T) {
 	fmt.Printf("=== Encodings ===\n")
 	for _, enc := range encodings {
 		fmt.Printf("* Demo for %s:\n", enc.Desc)
-		// fmt.Printf("  %s\n", jsonPretty(enc.Val(gkeHappyNaming(5, 2)), 2))
-		// fmt.Printf("  %s\n", jsonPretty(enc.Val(gkeNaming("c", "p")(30, 5)), 2))
-		fmt.Printf("  %s\n", jsonPretty(enc.Val(eksNaming(30, 5)), 2))
+		// naming := gkeHappyNaming(12, 2)
+		// naming := gkeNaming("c", "p")(30, 5)
+		names := eksNaming(20000, 5)
+		// naming := aksNaming("node-pool-")(1000, 5)
+		res := enc.Val(names)
+		verify(names, res)
+		fmt.Printf("  %s\n", jsonPretty(res, 2))
 	}
 }
 
+// func TestValidity(t *testing.T) {
+// 	fmt.Printf("=== Validity ===\n")
+// 	for _, enc := range encodings {
+// 		fmt.Printf("* %33s:\n", enc.Desc)
+// 		for _, n := range namings {
+// 			fmt.Printf("  - %13s: ", n.Desc)
+// 			for i := range 1000 {
+// 				names := n.Val(20000, 5)
+// 				res := enc.Val(names)
+// 				verify(names, res)
+// 				fmt.Printf(".")
+// 				if (i+1)%50 == 0 {
+// 					fmt.Printf("\n%s", strings.Repeat(" ", 19))
+// 				}
+// 			}
+// 		}
+// 		fmt.Printf("\n")
+// 	}
+// }
+
 func testDesc(encDesc, nDesc string, nodePools int) string {
-	return fmt.Sprintf("%26s | %13s | %4d pools", encDesc, nDesc, nodePools)
+	return fmt.Sprintf("%33s | %13s | %4d pools", encDesc, nDesc, nodePools)
 }
 
 func TestLimits(t *testing.T) {
@@ -903,7 +1183,10 @@ func TestLimits(t *testing.T) {
 				td := testDesc(enc.Desc, n.Desc, nodePools)
 				m := map[int]int{}
 				for _, size := range []int{20, 30, 40} {
-					s := jsonStr(enc.Val(n.Val(size*1000, nodePools)))
+					names := n.Val(size*1000, nodePools)
+					res := enc.Val(names)
+					verify(names, res)
+					s := jsonStr(res)
 					m[size] = len(s)
 					// fmt.Printf("[%s]   %dk nodes -> %d bytes\n", td, size, len(s))
 				}
