@@ -1138,35 +1138,35 @@ func TestEncoding(t *testing.T) {
 	fmt.Printf("=== Encodings ===\n")
 	for _, enc := range encodings {
 		fmt.Printf("* Demo for %s:\n", enc.Desc)
-		// naming := gkeHappyNaming(12, 2)
-		// naming := gkeNaming("c", "p")(30, 5)
-		names := eksNaming(20000, 5)
-		// naming := aksNaming("node-pool-")(1000, 5)
+		// names := gkeHappyNaming(12, 2)
+		// names := gkeNaming("c", "p")(30, 5)
+		// names := eksNaming(20000, 5)
+		names := aksNaming("node-pool-")(1000, 5)
 		res := enc.Val(names)
 		verify(names, res)
 		fmt.Printf("  %s\n", jsonPretty(res, 2))
 	}
 }
 
-// func TestValidity(t *testing.T) {
-// 	fmt.Printf("=== Validity ===\n")
-// 	for _, enc := range encodings {
-// 		fmt.Printf("* %33s:\n", enc.Desc)
-// 		for _, n := range namings {
-// 			fmt.Printf("  - %13s: ", n.Desc)
-// 			for i := range 1000 {
-// 				names := n.Val(20000, 5)
-// 				res := enc.Val(names)
-// 				verify(names, res)
-// 				fmt.Printf(".")
-// 				if (i+1)%50 == 0 {
-// 					fmt.Printf("\n%s", strings.Repeat(" ", 19))
-// 				}
-// 			}
-// 		}
-// 		fmt.Printf("\n")
-// 	}
-// }
+func TestValidity(t *testing.T) {
+	fmt.Printf("=== Validity ===\n")
+	for _, enc := range encodings {
+		fmt.Printf("* %33s:\n", enc.Desc)
+		for _, n := range namings {
+			fmt.Printf("  - %13s: ", n.Desc)
+			for i := range 1000 {
+				names := n.Val(20000, 5)
+				res := enc.Val(names)
+				verify(names, res)
+				fmt.Printf(".")
+				if (i+1)%50 == 0 {
+					fmt.Printf("\n%s", strings.Repeat(" ", 19))
+				}
+			}
+		}
+		fmt.Printf("\n")
+	}
+}
 
 func testDesc(encDesc, nDesc string, nodePools int) string {
 	return fmt.Sprintf("%33s | %13s | %4d pools", encDesc, nDesc, nodePools)
