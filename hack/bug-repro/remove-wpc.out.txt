@@ -1,0 +1,23 @@
+resourceflavor.kueue.x-k8s.io/repro-rf created
+clusterqueue.kueue.x-k8s.io/repro-cq created
+localqueue.kueue.x-k8s.io/repro-lq created
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-1 created
+job.batch/repro-job-1 created
+job.batch/repro-job-2 created
+NAME                    RESERVED_IN   PRIORITY
+job-repro-job-1-980d4   repro-cq      1000
+job-repro-job-2-91086   <none>        0
+--- Adding a priority class label to repro-job-2 ---
+job.batch/repro-job-2 labeled
+--- Verifying that the update succeeded ---
+    kueue.x-k8s.io/priority-class: repro-prio-1
+--- Removing priority class label from repro-job-2 ---
+Error from server (Forbidden): admission webhook "vjob.kb.io" denied the request: metadata.labels[kueue.x-k8s.io/priority-class]: Invalid value: "": field is immutable
+--- BUG: Operation disallowed ---
+--- Cleaning up ---
+job.batch "repro-job-1" deleted
+job.batch "repro-job-2" deleted
+workloadpriorityclass.kueue.x-k8s.io "repro-prio-1" deleted
+localqueue.kueue.x-k8s.io "repro-lq" deleted
+clusterqueue.kueue.x-k8s.io "repro-cq" deleted
+resourceflavor.kueue.x-k8s.io "repro-rf" deleted
