@@ -1,0 +1,42 @@
+resourceflavor.kueue.x-k8s.io/repro-rf unchanged
+clusterqueue.kueue.x-k8s.io/repro-cq configured
+localqueue.kueue.x-k8s.io/repro-lq unchanged
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-1 unchanged
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-2 unchanged
+job.batch/repro-job-1 configured
+job.batch/repro-job-2 configured
+NAME                    RESERVED_IN   PRIORITY
+job-repro-job-1-b77a9   <none>        1000
+job-repro-job-2-5004d   repro-cq      2000
+--- Patching repro-prio-2 to have value 500 ---
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-2 patched
+--- Verifying that patching succeeded ---
+NAME           VALUE
+repro-prio-2   500
+--- Giving Kueue some seconds to reconcile ---
+.....
+--- Expect repro-job-2 to have priority 500, and be preempted ---
+NAME                    RESERVED_IN   PRIORITY
+job-repro-job-1-b77a9   <none>        1000
+job-repro-job-2-5004d   repro-cq      2000
+--- BUG: Nothing changed ---
+--- Patching repro-prio-1 to have value 3000 ---
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-1 patched
+--- Verifying that patching succeeded ---
+NAME           VALUE
+repro-prio-1   3000
+--- Giving Kueue some seconds to reconcile ---
+.....
+--- Expect repro-job-1 to have priority 3000, and to preempt repro-job-2 ---
+NAME                    RESERVED_IN   PRIORITY
+job-repro-job-1-b77a9   <none>        1000
+job-repro-job-2-5004d   repro-cq      2000
+--- BUG: Nothing changed ---
+--- Cleaning up ---
+job.batch "repro-job-1" deleted
+job.batch "repro-job-2" deleted
+workloadpriorityclass.kueue.x-k8s.io "repro-prio-1" deleted
+workloadpriorityclass.kueue.x-k8s.io "repro-prio-2" deleted
+localqueue.kueue.x-k8s.io "repro-lq" deleted
+clusterqueue.kueue.x-k8s.io "repro-cq" deleted
+resourceflavor.kueue.x-k8s.io "repro-rf" deleted
