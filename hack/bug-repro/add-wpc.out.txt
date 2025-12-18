@@ -1,0 +1,29 @@
+resourceflavor.kueue.x-k8s.io/repro-rf created
+clusterqueue.kueue.x-k8s.io/repro-cq created
+localqueue.kueue.x-k8s.io/repro-lq created
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-1 created
+workloadpriorityclass.kueue.x-k8s.io/repro-prio-2 created
+job.batch/repro-job-1 created
+job.batch/repro-job-2 created
+NAME                    RESERVED_IN   PRIORITY
+job-repro-job-1-5d814   repro-cq      1000
+job-repro-job-2-850e0   <none>        0
+--- Patching repro-job-2 to use repro-prio-2 priority class ---
+job.batch/repro-job-2 patched
+--- Verifying that patching succeeded ---
+    kueue.x-k8s.io/priority-class: repro-prio-2
+--- Giving Kueue some seconds to reconcile ---
+.....
+--- Expect repro-job-2 to have priority 2000, and become running ---
+NAME                    RESERVED_IN   PRIORITY
+job-repro-job-1-5d814   repro-cq      1000
+job-repro-job-2-850e0   <none>        0
+--- BUG: Expected 2000, got 0; repro-job-2 still not running ---
+--- Cleaning up ---
+job.batch "repro-job-1" deleted
+job.batch "repro-job-2" deleted
+workloadpriorityclass.kueue.x-k8s.io "repro-prio-1" deleted
+workloadpriorityclass.kueue.x-k8s.io "repro-prio-2" deleted
+localqueue.kueue.x-k8s.io "repro-lq" deleted
+clusterqueue.kueue.x-k8s.io "repro-cq" deleted
+resourceflavor.kueue.x-k8s.io "repro-rf" deleted
