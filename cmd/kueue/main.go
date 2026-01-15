@@ -128,19 +128,23 @@ func main() {
 	var featureGates string
 	flag.StringVar(&featureGates, "feature-gates", "", "A set of key=value pairs that describe feature gates for alpha/experimental features.")
 
-	opts := zap.Options{
+	zapOpts := zap.Options{
 		TimeEncoder: zapcore.RFC3339NanoTimeEncoder,
 		ZapOpts:     []zaplog.Option{zaplog.AddCaller()},
 	}
-	opts.BindFlags(flag.CommandLine)
+	zapOpts.BindFlags(flag.CommandLine)
+	visibilityOpts := visibility.SetupVisibilityServerOptions()
+
 	flag.Parse()
-	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&zapOpts)))
 
 	options, cfg, err := apply(configFile)
 	if err != nil {
 		setupLog.Error(err, "Unable to load the configuration")
 		os.Exit(1)
 	}
+	setupLog.Info("Kubeconfig path in visibility config: " + visibilityOpts.CoreAPI.CoreAPIKubeconfigPath)
 
 	if err := config.ValidateFeatureGates(featureGates, cfg.FeatureGates); err != nil {
 		setupLog.Error(err, "conflicting feature gates detected")
@@ -159,7 +163,7 @@ func main() {
 		}
 	}
 
-	setupLog.Info("Initializing", "gitVersion", version.GitVersion, "gitCommit", version.GitCommit, "buildDate", version.BuildDate)
+	setupLog.Info("Initializing", "gitVersion", version.GitVersion, "gitCommit", version.GitCommit, "buildDate", version.BuildDate, "localPatchVersion", "6")
 
 	features.LogFeatureGates(setupLog)
 
@@ -302,7 +306,7 @@ func main() {
 
 	if features.Enabled(features.VisibilityOnDemand) {
 		go func() {
-			if err := visibility.CreateAndStartVisibilityServer(ctx, queues, *cfg.InternalCertManagement.Enable, kubeConfig); err != nil {
+			if err := visibility.CreateAndStartVisibilityServer(ctx, queues, visibilityOpts, *cfg.InternalCertManagement.Enable, kubeConfig); err != nil {
 				setupLog.Error(err, "Unable to create and start visibility server")
 				os.Exit(1)
 			}
