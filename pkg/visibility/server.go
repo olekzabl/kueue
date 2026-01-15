@@ -18,10 +18,13 @@ package visibility
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"net"
 	"strings"
 
+	"github.com/go-logr/logr"
+	"github.com/spf13/pflag"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -73,9 +76,9 @@ func init() {
 // +kubebuilder:rbac:groups=flowcontrol.apiserver.k8s.io,resources=flowschemas/status,verbs=patch
 
 // CreateAndStartVisibilityServer creates a visibility server injecting KueueManager and starts it
-func CreateAndStartVisibilityServer(ctx context.Context, kueueMgr *qcache.Manager, enableInternalCertManagement bool, kubeConfig *rest.Config) error {
+func CreateAndStartVisibilityServer(ctx context.Context, kueueMgr *qcache.Manager, enableInternalCertManagement bool, kubeConfig *rest.Config, setupLog logr.Logger) error {
 	config := newVisibilityServerConfig(kubeConfig)
-	if err := applyVisibilityServerOptions(config, enableInternalCertManagement); err != nil {
+	if err := applyVisibilityServerOptions(config, enableInternalCertManagement, setupLog); err != nil {
 		return fmt.Errorf("unable to apply VisibilityServerOptions: %w", err)
 	}
 
@@ -95,7 +98,7 @@ func CreateAndStartVisibilityServer(ctx context.Context, kueueMgr *qcache.Manage
 	return nil
 }
 
-func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig, enableInternalCertManagement bool) error {
+func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig, enableInternalCertManagement bool, setupLog logr.Logger) error {
 	o := genericoptions.NewRecommendedOptions("", codecs.LegacyCodec(
 		visibilityv1beta2.SchemeGroupVersion,
 		visibilityv1beta1.SchemeGroupVersion,
@@ -112,6 +115,14 @@ func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig, en
 	o.Admission.DisablePlugins = disabledPlugins
 	if err := o.SecureServing.MaybeDefaultWithSelfSignedCerts("localhost", nil, []net.IP{net.ParseIP("127.0.0.1")}); err != nil {
 		return fmt.Errorf("error creating self-signed certificates: %v", err)
+	}
+	o.AddFlags(pflag.CommandLine)
+	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
+	pflag.Parse()
+	setupLog.Info("Kubeconfig path in visibility options: " + o.CoreAPI.CoreAPIKubeconfigPath)
+	if kubeconfigPath := o.CoreAPI.CoreAPIKubeconfigPath; kubeconfigPath != "" {
+		o.Authentication.RemoteKubeConfigFile = kubeconfigPath
+		o.Authorization.RemoteKubeConfigFile = kubeconfigPath
 	}
 	return o.ApplyTo(config)
 }
