@@ -23,7 +23,6 @@ import (
 	"net"
 	"strings"
 
-	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -76,7 +75,7 @@ func init() {
 // +kubebuilder:rbac:groups=flowcontrol.apiserver.k8s.io,resources=flowschemas/status,verbs=patch
 
 // CreateAndStartVisibilityServer creates a visibility server injecting KueueManager and starts it
-func CreateAndStartVisibilityServer(ctx context.Context, kueueMgr *qcache.Manager, enableInternalCertManagement bool, kubeConfig *rest.Config, setupLog logr.Logger) error {
+func CreateAndStartVisibilityServer(ctx context.Context, kueueMgr *qcache.Manager, enableInternalCertManagement bool, kubeConfig *rest.Config) error {
 	config := newVisibilityServerConfig(kubeConfig)
 	if err := applyVisibilityServerOptions(config, enableInternalCertManagement, setupLog); err != nil {
 		return fmt.Errorf("unable to apply VisibilityServerOptions: %w", err)
@@ -98,7 +97,7 @@ func CreateAndStartVisibilityServer(ctx context.Context, kueueMgr *qcache.Manage
 	return nil
 }
 
-func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig, enableInternalCertManagement bool, setupLog logr.Logger) error {
+func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig, enableInternalCertManagement bool) error {
 	o := genericoptions.NewRecommendedOptions("", codecs.LegacyCodec(
 		visibilityv1beta2.SchemeGroupVersion,
 		visibilityv1beta1.SchemeGroupVersion,
@@ -119,7 +118,6 @@ func applyVisibilityServerOptions(config *genericapiserver.RecommendedConfig, en
 	o.AddFlags(pflag.CommandLine)
 	pflag.CommandLine.AddGoFlagSet(flag.CommandLine)
 	pflag.Parse()
-	setupLog.Info("Kubeconfig path in visibility options: " + o.CoreAPI.CoreAPIKubeconfigPath)
 	if kubeconfigPath := o.CoreAPI.CoreAPIKubeconfigPath; kubeconfigPath != "" {
 		o.Authentication.RemoteKubeConfigFile = kubeconfigPath
 		o.Authorization.RemoteKubeConfigFile = kubeconfigPath
