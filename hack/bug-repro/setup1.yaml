@@ -1,0 +1,104 @@
+### ALL CLUSTERS ###
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ResourceFlavor
+metadata:
+  name: "rf1"
+  labels:
+    test-cluster: all
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: LocalQueue
+metadata:
+  namespace: "default"
+  name: "lq1"
+  labels:
+    test-cluster: all
+spec:
+  clusterQueue: "cq1"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: WorkloadPriorityClass
+metadata:
+  name: prio-0
+  labels:
+    test-cluster: all
+value: 0
+description: "Prio 0"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: WorkloadPriorityClass
+metadata:
+  name: prio-10
+  labels:
+    test-cluster: all
+value: 1000
+description: "Prio 1000"
+---
+apiVersion: kueue.x-k8s.io/v1beta1
+kind: WorkloadPriorityClass
+metadata:
+  name: prio-20
+  labels:
+    test-cluster: all
+value: 2000
+description: "Prio 2000"
+---
+### MANAGER ###
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: "cq1"
+  labels:
+    test-cluster: manager
+spec:
+  namespaceSelector: {} # match all.
+  resourceGroups:
+  - coveredResources: ["cpu", "memory"]
+    flavors:
+    - name: "rf1"
+      resources:
+      - name: "cpu"
+        nominalQuota: 20
+      - name: "memory"
+        nominalQuota: 36Gi
+  preemption:
+    withinClusterQueue: LowerPriority
+  admissionChecksStrategy:
+    admissionChecks:
+    - name: mk-ac
+---
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: AdmissionCheck
+metadata:
+  name: mk-ac
+  labels:
+    test-cluster: manager
+spec:
+  controllerName: kueue.x-k8s.io/multikueue
+  parameters:
+    apiGroup: kueue.x-k8s.io
+    kind: MultiKueueConfig
+    name: multikueue-config
+---
+### ALL WORKERS ###
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: "cq1"
+  labels:
+    test-cluster: all-workers
+spec:
+  namespaceSelector: {} # match all.
+  resourceGroups:
+  - coveredResources: ["cpu", "memory"]
+    flavors:
+    - name: "rf1"
+      resources:
+      - name: "cpu"
+        nominalQuota: 4
+      - name: "memory"
+        nominalQuota: 18Gi
+  preemption:
+    withinClusterQueue: LowerPriority
+### WORKER 1 ###
+### WORKER 2 ###

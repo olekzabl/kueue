@@ -1,0 +1,70 @@
+Cutting logs horizon at: 2026-02-18T11:00:20+00:00
+*** Cleaning up clusters ***
+--- Cleaning up manager ---
+--- Cleaning up worker1 ---
+--- Cleaning up worker2 ---
+*** Cleanup done. ***
+*** Creating Kueue objects ***
+--- Creating in manager ---
+resourceflavor.kueue.x-k8s.io/rf1 created
+localqueue.kueue.x-k8s.io/lq1 created
+workloadpriorityclass.kueue.x-k8s.io/prio-0 created
+workloadpriorityclass.kueue.x-k8s.io/prio-10 created
+workloadpriorityclass.kueue.x-k8s.io/prio-20 created
+clusterqueue.kueue.x-k8s.io/cq1 created
+admissioncheck.kueue.x-k8s.io/mk-ac created
+--- Creating in worker1 ---
+resourceflavor.kueue.x-k8s.io/rf1 created
+localqueue.kueue.x-k8s.io/lq1 created
+workloadpriorityclass.kueue.x-k8s.io/prio-0 created
+workloadpriorityclass.kueue.x-k8s.io/prio-10 created
+workloadpriorityclass.kueue.x-k8s.io/prio-20 created
+clusterqueue.kueue.x-k8s.io/cq1 created
+--- Creating in worker2 ---
+resourceflavor.kueue.x-k8s.io/rf1 created
+localqueue.kueue.x-k8s.io/lq1 created
+workloadpriorityclass.kueue.x-k8s.io/prio-0 created
+workloadpriorityclass.kueue.x-k8s.io/prio-10 created
+workloadpriorityclass.kueue.x-k8s.io/prio-20 created
+clusterqueue.kueue.x-k8s.io/cq1 created
+*** Creating Kueue objects done. ***
+*** Applying Kueue config changes ***
+--- Applying the new feature gates (incl. insecure configs) ---
+deployment.apps/kueue-controller-manager serverside-applied
+--- Restarting Kueue manager pods ---
+pod "kueue-controller-manager-d8f97d968-9jf6x" deleted from kueue-system namespace
+--- Waiting for the new pods to be ready ---
+deployment.apps/kueue-controller-manager condition met
+--- Waiting 2s more to prevent webhook races ---
+*** Done. ***
+Cutting logs horizon at: 2026-02-18T11:00:41+00:00
+job.batch/job1-1-b747l created
+job.batch/job1-2-zd5dq created
+job.batch/job1-3-dzn9c created
+job.batch/job1-4-vpj67 created
+job.batch/job1-5-x5fdx created
+job.batch/job1-6-c4c4t created
+job.batch/job1-7-gjrt6 created
+--- On cluster manager: ---
+NAME                     QUEUE   RESERVED IN   ADMITTED   FINISHED   AGE
+job-job1-1-b747l-a4271   lq1     cq1           True                  16s
+job-job1-2-zd5dq-ed714   lq1     cq1           True                  16s
+job-job1-3-dzn9c-ab6ae   lq1     cq1           True                  15s
+job-job1-4-vpj67-16c9f   lq1     cq1           True                  15s
+job-job1-5-x5fdx-250bd   lq1     cq1                                 15s
+job-job1-6-c4c4t-70227   lq1     cq1                                 15s
+job-job1-7-gjrt6-eba9e   lq1     cq1           True                  10s
+--- On cluster worker1: ---
+NAME                     QUEUE   RESERVED IN   ADMITTED   FINISHED   AGE
+job-job1-1-b747l-a4271   lq1     cq1           True                  17s
+job-job1-2-zd5dq-ed714   lq1                   False                 16s
+job-job1-5-x5fdx-250bd   lq1                                         14s
+job-job1-6-c4c4t-70227   lq1                                         13s
+job-job1-7-gjrt6-eba9e   lq1     cq1           True                  10s
+--- On cluster worker2: ---
+NAME                     QUEUE   RESERVED IN   ADMITTED   FINISHED   AGE
+job-job1-2-zd5dq-ed714   lq1                                         8s
+job-job1-3-dzn9c-ab6ae   lq1     cq1           True                  15s
+job-job1-4-vpj67-16c9f   lq1     cq1           True                  14s
+job-job1-5-x5fdx-250bd   lq1                                         13s
+job-job1-6-c4c4t-70227   lq1                                         13s
