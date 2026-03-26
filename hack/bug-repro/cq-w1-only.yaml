@@ -1,0 +1,22 @@
+apiVersion: kueue.x-k8s.io/v1beta2
+kind: ClusterQueue
+metadata:
+  name: "cq1"
+  labels:
+    test-cluster: manager
+spec:
+  namespaceSelector: {} # match all.
+  resourceGroups:
+  - coveredResources: ["cpu", "memory"]
+    flavors:
+    - name: "rf1"
+      resources:
+      - name: "cpu"
+        nominalQuota: 3
+      - name: "memory"
+        nominalQuota: 36Gi
+  preemption:
+    withinClusterQueue: LowerPriority
+  admissionChecksStrategy:
+    admissionChecks:
+    - name: mk-ac-2
