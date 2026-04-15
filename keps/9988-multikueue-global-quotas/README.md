@@ -133,7 +133,7 @@ In the existing [Visibility API](https://github.com/kubernetes-sigs/kueue/tree/m
 
 In the Alpha stage, we plan this endpoint to surface the following information:
 
-* `FlavorsReservation` and `FlavorsUsage` - in the same format and analogous meaning as [already used in ClusterQueueStatus](https://github.com/kubernetes-sigs/kueue/blob/6163e91e5a62befbdd421097fe0ec38b37d406e0/apis/kueue/v1beta2/clusterqueue_types.go#L294-L309); however, based on the worker-side workload statuses and flavor assignments.
+* `FlavorsReservation` and `FlavorsUsage` - in the same format and analogous meaning as [already used in ClusterQueueStatus](https://github.com/kubernetes-sigs/kueue/blob/6163e91e5a62befbdd421097fe0ec38b37d406e0/apis/kueue/v1beta2/clusterqueue_types.go#L294-L309); however, based on the **worker-side** workload statuses and flavor assignments.
 
 * The values of per-flavor quotas, aggregated from the specs of all [related worker ClusterQueues](#defining-related-worker-clusterqueues), exposed in the same format as the above usage stats.
 
@@ -434,25 +434,19 @@ The implementation details discussed below are based on the following guiding pr
 
 1. Avoid API calls with O(workload count) response size.
 
-   This is to avoid hitting large network delays or even control plane scalability bottlenecks. For context, workload count can reach hundreds of thousands, if not more.
+   This is to avoid processing lots of data at once. For context, workload count can reach hundreds of thousands. \
+   While we'll tolerate some O(workload count) computations, we'll prefer that their input are smaller than full Workload objects, to reduce the total amount of data processed.
 
-2. Tolerate API calls regarding other Kueue resource types, even on remote clients, and multiple of them.
+2. Tolerate API calls (`.Get()` and `.List()`) regarding other Kueue resource types, even on remote clients, and multiple of them.
 
-   This is intended to simplify the structure of [MultiKueue Cache](#multikueue-cache) and its handling code.
+   If this seems overly simplistic, keep in mind that:
 
-   While it may seem too simplistic (especially compared to core Kueue reconcilers, not to mention Kueue scheduler), here are a few insights justifying this approach:
+   * These API calls rely on `kube-controller` clients with local caching.
 
-   * Reconcilers can "afford" being less optimized if they're expected to run less often. \
-     In our case, the "slow" reconcile routines are only going to be triggered by creations / deletions / "re-bindings" (like [#10122](https://github.com/kubernetes-sigs/kueue/issues/10122)) within the Kueue setup objects, plus changes of MultiKueueConfigs and _quota changes_ in ClusterQueues (see Principle #4 below). \
-     This means a much lower rate of events than for scheduler cycles or even core reconcilers - **except** for a (hypothetical) scenario when some automation external to Kueue frequently updates e.g. worker ClusterQueue quotas.
+   * We only add new API calls in infrequently running procedures (and thus have much less need for sophisticated caching than, say, Kueue scheduler code). \
+     This **may need revisiting** in a (hypothetical) scenario when some automation external to Kueue frequently updates e.g. worker ClusterQueue quotas.
 
-   * This is based on the current status quo of MultiKueue, which, in particular:
-
-     * tolerates multiple `.List()` API calls triggered by a single change event (e.g. [here](https://github.com/kubernetes-sigs/kueue/blob/25538a4ea2979d975d75792c1f9a7124a0475c4a/pkg/controller/admissionchecks/multikueue/workload.go#L880-L890))
-
-     * tolerates cross-cluster API reads, even multiple in a single reconcile, and even if they could be avoided just by caching (e.g. [here](https://github.com/kubernetes-sigs/kueue/blob/25538a4ea2979d975d75792c1f9a7124a0475c4a/pkg/controller/admissionchecks/multikueue/workload.go#L312-L314) in `readGroup` - where all remote `Workload` object have been already seen by the manager cluster as a result of [this `.Watch()` call](https://github.com/kubernetes-sigs/kueue/blob/25538a4ea2979d975d75792c1f9a7124a0475c4a/pkg/controller/admissionchecks/multikueue/multikueuecluster.go#L178))
-
-   * Our `.List()` calls, once we adhere to Principle #1, will involve LocalQueues, ClusterQueues and AdmissionChecks, which do not tend to exist in large numbers.
+   * Except for Workloads, we'll be dealing with LocalQueues, ClusterQueues and AdmissionChecks, which do not tend to exist in large numbers.
 
    * If this approach ever turns too relaxed, we have numerous ways to win more efficiency by extending [MultiKueue Cache](#multikueue-cache).
 
@@ -558,11 +552,10 @@ The cache instance will be created in the [MultiKueue `SetupControllers` method]
 
 ### MultiKueue Workload Reconciler
 
-In the MultiKueue Workload Reconciler, every run of [`Reconcile`](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/pkg/controller/admissionchecks/multikueue/workload.go#L158) will update the values of `wlGroupResourceStats` in the [MultiKueue Cache](#multikueue-cache).
+The MultiKueue Workload Reconciler will be responsible for maintaining the [MultiKueue Cache](#multikueue-cache).
 
-The cache maintenance will happen after [this call](https://github.com/kubernetes-sigs/kueue/blob/25538a4ea2979d975d75792c1f9a7124a0475c4a/pkg/controller/admissionchecks/multikueue/workload.go#L224) `.readGroup()`. For non-deletion scenarios, it will be postponed to follow [this call](https://github.com/kubernetes-sigs/kueue/blob/083e985b0f750901b813e70a1e168348b21a42f8/pkg/controller/admissionchecks/multikueue/workload.go#L240) to `.reconcileGroup()`. 
-
-Notably, we anticipate no need for "snapshotting", even when Kueue is started (or restarted) in an existing cluster, or a new MultiKueue worker appears, etc. In such cases, [the `.Watch()` calls on remote workloads](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/pkg/controller/admissionchecks/multikueue/multikueuecluster.go#L178) will lead to a wave of reconciles for all workloads unknown to MultiKueue, through which the MultiKueue Cache will be updated incrementally.
+This will be handled in every run of [`Reconcile`](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/pkg/controller/admissionchecks/multikueue/workload.go#L158), after [this call](https://github.com/kubernetes-sigs/kueue/blob/25538a4ea2979d975d75792c1f9a7124a0475c4a/pkg/controller/admissionchecks/multikueue/workload.go#L224) to `.readGroup()`. \
+For non-deletion scenarios, it will be postponed to follow [this call](https://github.com/kubernetes-sigs/kueue/blob/083e985b0f750901b813e70a1e168348b21a42f8/pkg/controller/admissionchecks/multikueue/workload.go#L240) to `.reconcileGroup()`. 
 
 ### Visibility Server
 
