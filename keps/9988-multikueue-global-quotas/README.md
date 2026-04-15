@@ -557,6 +557,10 @@ The MultiKueue Workload Reconciler will be responsible for maintaining the [Mult
 This will be handled in every run of [`Reconcile`](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/pkg/controller/admissionchecks/multikueue/workload.go#L158), after [this call](https://github.com/kubernetes-sigs/kueue/blob/25538a4ea2979d975d75792c1f9a7124a0475c4a/pkg/controller/admissionchecks/multikueue/workload.go#L224) to `.readGroup()`. \
 For non-deletion scenarios, it will be postponed to follow [this call](https://github.com/kubernetes-sigs/kueue/blob/083e985b0f750901b813e70a1e168348b21a42f8/pkg/controller/admissionchecks/multikueue/workload.go#L240) to `.reconcileGroup()`. 
 
+On a Kueue restart, the cache will be eventually re-populated, as the controller-runtime library will schedule `Reconcile()` for all pre-existing (local) Workload objects.
+
+To ensure no "permanent zombie entries" in the cache (in a case of a missed delete event), we will add a "garbage collection routine" analogous to [this one](https://github.com/kubernetes-sigs/kueue/blob/249ad53617ee4d2aa0ee6573d4b38418bc549304/pkg/controller/admissionchecks/multikueue/multikueuecluster.go#L665). In the Alpha version, we will hook it to the same "GC interval" setting, defined [here](https://github.com/kubernetes-sigs/kueue/blob/9c92d93bf6f1988e59a459623dc9b345c2161ef6/apis/config/v1beta2/configuration_types.go#L302-L305).
+
 ### Visibility Server
 
 The Visibility Server will be provided with [MultiKueue Cache](#multikueue-cache) - [via `main.go`](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/cmd/kueue/main.go#L380), similarly as it's already given the core queues cache.
