@@ -47,7 +47,7 @@
   - [Support quota automation for multiple manager-side ResourceFlavors](#support-quota-automation-for-multiple-manager-side-resourceflavors)
   - [Support quota automation for no manager-side ResourceFlavors (auto-create one)](#support-quota-automation-for-no-manager-side-resourceflavors-auto-create-one)
   - [Avoid the quota automation multiplier](#avoid-the-quota-automation-multiplier)
-  - [Make the `MultiKueueManagerQuotaAutomation` Condition message more informative](#make-the-multikueuemanagerquotaautomation-condition-message-more-informative)
+  - [Make the <code>MultiKueueManagerQuotaAutomation</code> Condition message more informative](#make-the-multikueuemanagerquotaautomation-condition-message-more-informative)
   - [Expose the cross-worker resource stats in the manager ClusterQueue Status](#expose-the-cross-worker-resource-stats-in-the-manager-clusterqueue-status)
 <!-- /toc -->
 
