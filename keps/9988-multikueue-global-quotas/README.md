@@ -432,10 +432,12 @@ However, the new flavor utilization stats are **not** going to be just aggregate
 
 The implementation details discussed below are based on the following guiding principles:
 
-1. Avoid API calls with O(workload count) response size.
+1. Avoid API calls with O(workload count) response size, especially remote ones.
 
    This is to avoid processing lots of data at once. For context, workload count can reach hundreds of thousands. \
    While we'll tolerate some O(workload count) computations, we'll prefer that their input are smaller than full Workload objects, to reduce the total amount of data processed.
+
+   Remote API calls of that kind should be avoided even more because, even though MultiKueue already watches remote Workloads, it doesn't currently cache them. (And if we enabled client-level caching here, it would have a significantly larger memory footprint than the proposed [MultiKueue Cache](#multikueue-cache)).
 
 2. Tolerate API calls (`.Get()` and `.List()`) regarding other Kueue resource types, even on remote clients, and multiple of them.
 
