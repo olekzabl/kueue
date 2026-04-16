@@ -40,6 +40,7 @@
   - [Possible Follow-ups](#possible-follow-ups)
     - [Expand the cross-worker resource stats](#expand-the-cross-worker-resource-stats)
     - [Introduce a MultiKueue manager ClusterQueue quota reservation overbooking multiplier](#introduce-a-multikueue-manager-clusterqueue-quota-reservation-overbooking-multiplier)
+    - [Track borrowable quota on the worker side](#track-borrowable-quota-on-the-worker-side)
   - [Graduation Criteria](#graduation-criteria)
 - [Drawbacks](#drawbacks)
 - [Alternatives](#alternatives)
@@ -480,7 +481,7 @@ Reconciling a manager ClusterQueue `Q` will proceed as follows:
 
 7. Fetch all worker ClusterQueues connected to those LocalQueues (using a single unfilterd remote API `.List()` call).
 
-8. Determine the new quota values for `Q`.
+8. Determine the new quota values for `Q` (using the recipe described [here](#manager-quota-automation), with `QuotaMultiplier` used as the multiplier).
 
 9. If `MultiKueueManagerQuotaAutomation` is not `True`, set it to `True`.
 
@@ -527,11 +528,6 @@ A new **MultiKueue Cache** will store the minimal information on the watched rem
 The cache format will be tentatively as follows:
 
 ```go
-type workloadReference struct {
-   Name string
-   Namespace string
-}
-
 type FlavorsUtilization struct {
    Reserved FlavorResourceQuantities
    Admitted FlavorResourceQuantities 
@@ -544,9 +540,11 @@ type wlGroupResourceInfo struct {
 }
 
 type MultiKueueCache struct {
-   wlGroupResourceStats map[workloadReference]wlGroupResourceInfo
+   wlGroupResourceStats map[workload.Reference]wlGroupResourceInfo
 }
 ```
+
+(where `workload.Reference` is defined [here](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/pkg/workload/workload.go#L89)).
 
 The `FlavorsUtilization` struct refers to an existing type of [`FlavorResourceQuantities`](https://github.com/kubernetes-sigs/kueue/blob/3f0c4b2884fe5577d7a7ae4c3579a49718077be3/pkg/resources/resource.go#L37), which differs from `WorkerFlavorUsage` used on the API surface. This is deliberate: the former representation allows more efficient and convenient summation.
 
@@ -692,6 +690,16 @@ Yet, this comes with some **disadvantages**:
 
 Therefore, this idea is **shelved** for now. We may consider it later, depending on the feedback.
 
+#### Track borrowable quota on the worker side
+
+The possibility of borrowing within a Cohort clearly influences the actual capacity of a ClusterQueue, and thus could be included in the calculation of "total quota" - **both** in [manager quota automation](#manager-quota-automation) and [cross-worker resource stats](#cross-worker-resource-stats-in-visibility-api).
+
+This is **shelved** for now due to the added complexity, both in implementation and specific desired behavior. Example questions:
+
+* Should we simply increase the total quota by the `borrowingLimit`s on the workers?
+* If borrowing does not allow preemption, should we rather define "borrowable quota" as "the minimum of borrowing limit and current unused capacity on the lending ClusterQueues"?
+* Should we expose an analogue of [the `Borrowed` field](https://github.com/kubernetes-sigs/kueue/blob/6163e91e5a62befbdd421097fe0ec38b37d406e0/apis/kueue/v1beta2/clusterqueue_types.go#L359) in [cross-worker resource stats](#cross-worker-resource-stats-in-visibility-api-1)? Then, if a worker-side ClusterQueue used borrowing to host MultiKueue workloads from a manager ClusterQueue `Q` as well as various ["stray" Workloads](#potential-reasons-for-decreasing-manager-quota), how should we report that?
+
 ### Graduation Criteria
 
 This design is covered by two feature gates:
@@ -746,6 +754,13 @@ Besides introducing some risks (see [Risks and Mitigations](#risks-and-mitigatio
    See [#10428](https://github.com/kubernetes-sigs/kueue/issues/10428) which describes this problem in more detail, and speculates that it may already affect existing MultiKueue reconcilers (e.g. the one for Workloads).
 
    If this turns out problematic, it should be fixable by extending the [MultiKueue Cache](#multikueue-cache) with the "manager ClusterQueue <-> MultiKueueCluster" relationship.
+
+1. The proposed cross-worker resource stats fall short of giving a full and clear picture of resource availability and usage on the workers. \
+   This is mostly due to the "stray Workloads" scenario (see [here](#potential-reasons-for-decreasing-manager-quota)). Whenever a worker-side ClusterQueue `Q2` is [related](#defining-related-worker-clusterqueues) to a manager-side ClusterQueue `Q`, its whole capacity will contribute to `FlavorsQuotas` in our proposed Visibility API output, while any Workloads unrelated to `Q` will **not** contribute to `FlavorsReservation` and `FlavorsUsage`. This may lead a user to have a false impression that the quota already reserved by such "stray Workloads" is still available for use.
+
+   This could be mitigated by emitting yet another statistic of "external usage" of worker resources. For now, we postpone this, and await feedback.
+
+1. We have fully ignored the topic of Cohorts and quota borrowing. This is deliberate, and intended to retain any reasonable simplicity of both features, at least in the Alpha stage. (Possible follow-up work is briefly discussed [here](#track-borrowable-quota-on-the-worker-side)).
 
 ## Alternatives
 
