@@ -444,12 +444,14 @@ The implementation details discussed below are based on the following guiding pr
 
    If this seems overly simplistic, keep in mind that:
 
-   * These API calls rely on `kube-controller` clients with local caching.
-
    * We only add new API calls in infrequently running procedures (and thus have much less need for sophisticated caching than, say, Kueue scheduler code). \
      This **may need revisiting** in a (hypothetical) scenario when some automation external to Kueue frequently updates e.g. worker ClusterQueue quotas.
 
    * Except for Workloads, we'll be dealing with LocalQueues, ClusterQueues and AdmissionChecks, which do not tend to exist in large numbers.
+
+   * This feels in line with the current MultiKueue approach, in which we e.g. tolerate remote `.Get()` calls [here](https://github.com/kubernetes-sigs/kueue/blob/161a2abc9e484b9fe0d6b3025c0bcac4fb8ef3a4/pkg/controller/admissionchecks/multikueue/workload.go#L314) inside the MultiKueue Workload Reconciler.
+
+   * The local API calls are backed by `controller-runtime` client-side caching.
 
    * If this approach ever turns too relaxed, we have numerous ways to win more efficiency by extending [MultiKueue Cache](#multikueue-cache).
 
