@@ -32,6 +32,7 @@
   - [MultiKueue Cluster Reconciler](#multikueue-cluster-reconciler)
   - [MultiKueue Cache](#multikueue-cache)
   - [MultiKueue Workload Reconciler](#multikueue-workload-reconciler)
+    - [Ensuring cache availability on non-Kueue-leader Pods](#ensuring-cache-availability-on-non-kueue-leader-pods)
   - [Visibility Server](#visibility-server)
   - [Test Plan](#test-plan)
     - [Unit Tests](#unit-tests)
@@ -562,6 +563,35 @@ For non-deletion scenarios, it will be postponed to follow [this call](https://g
 On a Kueue restart, the cache will be eventually re-populated, as the controller-runtime library will schedule `Reconcile()` for all pre-existing (local) Workload objects.
 
 To ensure no "permanent zombie entries" in the cache (in a case of a missed delete event), we will add a "garbage collection routine" analogous to [this one](https://github.com/kubernetes-sigs/kueue/blob/249ad53617ee4d2aa0ee6573d4b38418bc549304/pkg/controller/admissionchecks/multikueue/multikueuecluster.go#L665). In the Alpha version, we will hook it to the same "GC interval" setting, defined [here](https://github.com/kubernetes-sigs/kueue/blob/9c92d93bf6f1988e59a459623dc9b345c2161ef6/apis/config/v1beta2/configuration_types.go#L302-L305).
+
+#### Ensuring cache availability on non-Kueue-leader Pods
+
+Our plan of populating [MultiKueue Cache](#multikueue-cache) in the MultiKueue Workload Reconciler to be used by [Visibility Server](#visibility-server) may hit obstacles of 2 kinds:
+
+1. If Kueue controller is deployed on multiple Pods, the MultiKueue Workload Controller won't be started on the followers.
+
+   * This obstacle is already present for the Kueue core cache, where it's currently mitigated by making the core controllers ["leader aware"](https://github.com/kubernetes-sigs/kueue/blob/main/pkg/controller/core/leader_aware_reconciler.go), so that the follower instances run only the predicate methods (`.Create()`/ `.Update()` / `.Delete()`) but not the `Reconcile()` method. Then, as long as the cache is populated in predicates, it can be kept up-to-date also on the followers, without the proper `.Reconcile()` methods racing for etcd updates.
+
+   * The above approach is **insufficient** in our case, as [MultiKueue Cache](#multikueue-cache) depends on _remote_ API Workloads which we need to fetch in the `.Reconcile()` method. This logic is too heavy to be moved to predicates.
+
+     Therefore, for our case, we propose a **variation** of [`leader_aware_reconciler`](https://github.com/kubernetes-sigs/kueue/blob/main/pkg/controller/core/leader_aware_reconciler.go), which would accept a controller implementing a richer interface
+
+     ```golang
+     interface ReconcilerWithFollowerObserver {
+       TypedReconciler[Request]
+       Observe(context.Context, request) (Result, error)
+     }
+     ```
+
+     and, when about to reconcile an event, delegate to `.Reconcile()` or `.Observe()`, depending on the current leader/follower role.
+
+     Then, we'll make the MultiKueue Workload Reconciler wrapped with that, with the `.Observe()` method responsible only for updating [MultiKueue Cache](#multikueue-cache). (Internally, there will be some code sharing to avoid duplication).
+
+2. In [#10553](https://github.com/kubernetes-sigs/kueue/issues/10553), it's been proposed to separate Visibility API into a separate Pod / Deployment. This will clearly make it impossible to pass it any cached data from the "proper" Kueue binary.
+
+   The proposed solution for this (initially agreed on in [#10553](https://github.com/kubernetes-sigs/kueue/issues/10553)) is to equip the Visibility Server binary with a sufficient set of controllers (preferably read-only ones) to provide the necessary information, partially duplicating some of the logic of the already existing Kueue controllers.
+
+   This can be implemented with a very similar mechanism as in the previous point: the Visibility Server simply needs to run the `.Observe()` method (to populate the cache) but not `.Reconcile()` (no need to update the Worlkoads). Thus, we can equip it with an **adjusted version** of the MultiKueue Workload Reconciler, which delegates `.Reconcile()` to execute just `.Observe()` even on the leader replica.
 
 ### Visibility Server
 
