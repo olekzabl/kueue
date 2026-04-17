@@ -587,11 +587,11 @@ Our plan of populating [MultiKueue Cache](#multikueue-cache) in the MultiKueue W
 
      Then, we'll make the MultiKueue Workload Reconciler wrapped with that, with the `.Observe()` method responsible only for updating [MultiKueue Cache](#multikueue-cache). (Internally, there will be some code sharing to avoid duplication).
 
-2. In [#10553](https://github.com/kubernetes-sigs/kueue/issues/10553), it's been proposed to separate Visibility API into a separate Pod / Deployment. This will clearly make it impossible to pass it any cached data from the "proper" Kueue binary.
+2. In [#10553](https://github.com/kubernetes-sigs/kueue/issues/10553), it's been proposed to separate Visibility API into a separate Pod / Deployment. This will clearly make it impossible to pass to it any cached data from the "proper" Kueue binary.
 
-   The proposed solution for this (initially agreed on in [#10553](https://github.com/kubernetes-sigs/kueue/issues/10553)) is to equip the Visibility Server binary with a sufficient set of controllers (preferably read-only ones) to provide the necessary information, partially duplicating some of the logic of the already existing Kueue controllers.
+   The proposed solution for this (initially agreed on in [#10553](https://github.com/kubernetes-sigs/kueue/issues/10553)) is to equip the Visibility Server binary with a sufficient set of "observing" controllers (not making updates to Kueue API resources) to provide the necessary information, partially duplicating some of the logic of the already existing Kueue controllers.
 
-   This can be implemented with a very similar mechanism as in the previous point: the Visibility Server simply needs to run the `.Observe()` method (to populate the cache) but not `.Reconcile()` (no need to update the Worlkoads). Thus, we can equip it with an **adjusted version** of the MultiKueue Workload Reconciler, which delegates `.Reconcile()` to execute just `.Observe()` even on the leader replica.
+   This can be implemented with a very similar mechanism as in the previous point: the Visibility Server simply needs to run the `.Observe()` method (to populate the cache) but not `.Reconcile()` (no need to update the Workloads). Thus, we can equip it with an **adjusted version** of the MultiKueue Workload Reconciler, which delegates `.Reconcile()` to execute just `.Observe()` even on the leader replica.
 
 ### Visibility Server
 
