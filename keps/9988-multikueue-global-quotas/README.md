@@ -683,14 +683,16 @@ The [proposed format] of cross-worker resource stats ([overview](#cross-worker-r
 
 Early insights suggest that we might want to develop this in various directions:
 
-- Expose the above data broken down also per worker. \
+* Expose the above data broken down also per worker. \
   This would make it effectively a collection of _3D arrays_, posing a question how to arrange those to be best human-readable right away (and whether we should at all aim at that). \
-  Our initial idea is to group by resource, then worker, then flavor, though for now we leave it open for feedback.
+   Our initial idea is to group by resource, then worker, then flavor, though for now we leave it open for feedback.
 
-- Expose per-LocalQueue stats (like in the existing Visibility API endpoint).
+* Expose per-LocalQueue stats (like in the existing Visibility API endpoint).
 
-- Support borrowing information, like [here](https://github.com/kubernetes-sigs/kueue/blob/6163e91e5a62befbdd421097fe0ec38b37d406e0/apis/kueue/v1beta2/clusterqueue_types.go#L359). \
+* Support borrowing information, like [here](https://github.com/kubernetes-sigs/kueue/blob/6163e91e5a62befbdd421097fe0ec38b37d406e0/apis/kueue/v1beta2/clusterqueue_types.go#L359). \
   This could be less clear in the MultiKueue case, due to the "stray workloads" story. (For example: if the manager-side ClusterQueue `Q` dispatched a 4 CPU Job to ClusterQueue `Q2` on `worker1`, which happens to also host another 6 CPU Job unrelated to MultiKueue, using 8 CPU of nominal quota and borrowing 2 CPU from a Cohort on `worker2`, then what value of `Borrowed` should we report for `Q`? 2 CPU? 0 CPU? Some "proportional fraction" like 0.8 CPU?)
+
+* Add "external usage" information scoped to all kinds of "stray workloads" (specifically: how many resources are used on the related worker ClusterQueues by workloads submitted *outside* the currently considered manager ClusterQueue).
 
 #### Introduce a MultiKueue manager ClusterQueue quota reservation overbooking multiplier
 
@@ -791,7 +793,7 @@ Besides introducing some risks (see [Risks and Mitigations](#risks-and-mitigatio
 1. The proposed cross-worker resource stats fall short of giving a full and clear picture of resource availability and usage on the workers. \
    This is mostly due to the "stray Workloads" scenario (see [here](#potential-reasons-for-decreasing-manager-quota)). Whenever a worker-side ClusterQueue `Q2` is [related](#defining-related-worker-clusterqueues) to a manager-side ClusterQueue `Q`, its whole capacity will contribute to `FlavorsQuotas` in our proposed Visibility API output, while any Workloads unrelated to `Q` will **not** contribute to `FlavorsReservation` and `FlavorsUsage`. This may lead a user to have a false impression that the quota already reserved by such "stray Workloads" is still available for use.
 
-   This could be mitigated by emitting yet another statistic of "external usage" of worker resources. For now, we postpone this, and await feedback.
+   This could be mitigated by emitting "external usage" stats (see [this potential follow-up](#expand-the-cross-worker-resource-stats)). For now, we postpone this, and await feedback.
 
 1. We have fully ignored the topic of Cohorts and quota borrowing. This is deliberate, and intended to retain any reasonable simplicity of both features, at least in the Alpha stage. (Possible follow-up work is briefly discussed [here](#track-borrowable-quota-on-the-worker-side)).
 
