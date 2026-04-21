@@ -92,7 +92,8 @@ While this approach offers simplicity and network savings, it also leads to prob
 3. For the MultiKueue controller on the manager cluster, having no awareness of workers' quotas (and their usage) makes dispatching choices less effective. \
    Even though we generally don't want the manager to take over _the whole_ orchestrating work from the workers (as we intend to share it between both sides), some improvements are likely possible. For example, if a workload fits within the quota of worker A but not of worker B, there is no point in dispatching it to B before A. (At least, unless B could admit it through borrowing).
 
-   While designing specific improvements to dispatching is **out of scope** of this KEP, they all **depend** on building a mechanism allowing for manager awareness of workers' quotas - which this KEP proposes.
+   While designing specific improvements to dispatching is **out of scope** of this KEP, they all **depend** on building a mechanism allowing for manager awareness of workers' quotas. \
+   Such a mechanism can be naturally implemented as an extension of the [MultiKueue Cache](#multikueue-cache) which this KEP proposes.
 
 ### Goals
 
