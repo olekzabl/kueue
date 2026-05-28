@@ -335,6 +335,15 @@ const (
 	// concurrent preemptions causing disruptions to other workloads.
 	MultiKueueOrchestratedPreemption featuregate.Feature = "MultiKueueOrchestratedPreemption"
 
+	// owner: @ziwen-ning
+	//
+	// Enables a custom MultiKueue dispatcher that performs cross-cluster preemption: when a
+	// workload arrives at the manager and no worker has admittable capacity, the dispatcher
+	// evaluates cohort-sibling workers (CQs sharing the same `spec.cohortName`) for a
+	// lower-priority preemption victim and, if found, evicts it on its worker before nominating
+	// that worker for the incoming workload.
+	MultiKueueCrossClusterPreemption featuregate.Feature = "MultiKueueCrossClusterPreemption"
+
 	// owner: @vladikkuzn
 	// kep: https://github.com/kubernetes-sigs/kueue/tree/main/keps/7990-preemption-cost
 	//
@@ -590,6 +599,9 @@ var defaultVersionedFeatureGates = map[featuregate.Feature]featuregate.Versioned
 	},
 	MultiKueueOrchestratedPreemption: {
 		{Version: version.MustParse("0.17"), Default: false, PreRelease: featuregate.Alpha},
+	},
+	MultiKueueCrossClusterPreemption: {
+		{Version: version.MustParse("0.18"), Default: false, PreRelease: featuregate.Alpha},
 	},
 	PriorityBoost: {
 		{Version: version.MustParse("0.17"), Default: false, PreRelease: featuregate.Alpha},

@@ -352,6 +352,15 @@ const (
 	// MultiKueueDispatcherModeIncremental is the name of dispatcher mode where worker clusters are incrementally added to the pool of nominated clusters.
 	// The process begins with up to 3 initial clusters and expands the pool by up to 3 clusters at a time (if fewer remain, all are added).
 	MultiKueueDispatcherModeIncremental = "kueue.x-k8s.io/multikueue-dispatcher-incremental"
+
+	// MultiKueueDispatcherModeCrossClusterPreemption is the name of the dispatcher mode that, when a workload's
+	// home worker has no admittable capacity, evaluates cohort-sibling worker clusters for a lower-priority
+	// preemption victim. If a victim is found, it is evicted on its home worker and the incoming workload is
+	// nominated for that cluster. Cohort membership is declared via the standard
+	// `ClusterQueue.spec.cohortName` field — the same way as in single-cluster Kueue.
+	//
+	// This dispatcher requires the MultiKueueCrossClusterPreemption feature gate to be enabled.
+	MultiKueueDispatcherModeCrossClusterPreemption = "kueue.x-k8s.io/multikueue-dispatcher-cross-cluster-preemption"
 )
 
 type RequeuingStrategy struct {

@@ -123,6 +123,19 @@ For the external controller to patch the `.status.nominatedClusterNames` field t
 Without this, the Kueue is not able to admit the MultiKueue workloads.
 {{% /alert %}}
 
+### Cross-Cluster Preemption (Alpha):
+This mode allows a high-priority workload arriving at the manager to evict a
+lower-priority workload running on a sibling worker cluster, then dispatch
+to the freed cluster. Cohort relationships use the standard single-cluster
+[Cohort](/docs/concepts/cluster_queue/#cohort) API: ClusterQueues join a
+cohort by setting `spec.cohortName`, and per-ClusterQueue opt-in uses
+`spec.preemption.reclaimWithinCohort` (`Never` / `LowerPriority` / `Any`).
+There is no MultiKueue-specific cohort CRD; cohort-level properties live on
+the standard single-cluster `Cohort` CR. See
+[Cross-Cluster Preemption](/docs/tasks/run/multikueue/cross_cluster_preemption)
+for setup details. Gated by the `MultiKueueCrossClusterPreemption` feature
+gate (alpha, default off).
+
 ## Supported Job Types
 
 MultiKueue supports a wide variety of workloads. You can learn how to:

@@ -63,6 +63,14 @@ const (
 	// This gate is automatically applied to remote Workloads to eliminate parallel preemptions.
 	MultiKueuePreemptionGate = "kueue.x-k8s.io/multikueue"
 
+	// MultiKueueCrossClusterPreemptionVictimAnnotation is the annotation key set on a remote
+	// Workload by the cross-cluster-preemption dispatcher to claim it as a preemption victim
+	// of a specific incoming workload. The value is the namespace/name of the incoming
+	// workload (the workload that triggered the preemption). The annotation is used as a
+	// single-writer lock so concurrent dispatcher reconciles for different incoming
+	// workloads cannot pick the same victim.
+	MultiKueueCrossClusterPreemptionVictimAnnotation = "kueue.x-k8s.io/multikueue-cross-preemption-victim-of"
+
 	// PriorityBoostAnnotationKey is the annotation key on a Workload that allows
 	// external controllers to adjust a workload's effective priority.
 	// Positive values increase priority; negative values decrease it.
