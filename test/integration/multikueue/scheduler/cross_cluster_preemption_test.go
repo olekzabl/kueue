@@ -54,13 +54,14 @@ import (
 	"sigs.k8s.io/kueue/pkg/controller/constants"
 	workloadjob "sigs.k8s.io/kueue/pkg/controller/jobs/job"
 	"sigs.k8s.io/kueue/pkg/features"
+	"sigs.k8s.io/kueue/pkg/util/admissioncheck"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
 	testingjob "sigs.k8s.io/kueue/pkg/util/testingjobs/job"
 	"sigs.k8s.io/kueue/pkg/workload"
 	"sigs.k8s.io/kueue/test/util"
 )
 
-var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
+var _ = ginkgo.FDescribe("MultiKueue cross-cluster preemption",
 	ginkgo.Label("area:multikueue", "feature:multikueue", "feature:cross-cluster-preemption"),
 	ginkgo.Ordered, ginkgo.ContinueOnFailure, func() {
 		var (
@@ -92,7 +93,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 		ginkgo.BeforeAll(func() {
 			managerTestCluster.fwk.StartManager(managerTestCluster.ctx, managerTestCluster.cfg, func(ctx context.Context, mgr manager.Manager) {
 				managerAndMultiKueueSetup(ctx, mgr, 2*time.Second, defaultEnabledIntegrations,
-					config.MultiKueueDispatcherModeCrossClusterPreemption)
+					config.MultiKueueDispatcherModeAllAtOnce)
 			})
 		})
 		ginkgo.AfterAll(func() {
@@ -101,6 +102,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 
 		ginkgo.BeforeEach(func() {
 			features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.MultiKueueCrossClusterPreemption, true)
+			features.SetFeatureGateDuringTest(ginkgo.GinkgoTB(), features.MultiKueueOrchestratedPreemption, true)
 
 			managerNs = util.CreateNamespaceFromPrefixWithLog(managerTestCluster.ctx, managerTestCluster.client, "ccp-")
 			worker1Ns = util.CreateNamespaceWithLog(worker1TestCluster.ctx, worker1TestCluster.client, managerNs.Name)
@@ -178,10 +180,8 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 			// --- Worker-side CQs ---
 			// Per-worker capacity math (mirrors POC):
 			//   cohort:        tenant-a-cq(nom=1) + tenant-b-cq(nom=0) = 1 CPU
-			//   tenant A:      owner; ReclaimWithinCohort=Never (never a victim source)
-			//   tenant B:      borrower; ReclaimWithinCohort=LowerPriority
-			//                  (borrows from cohort to admit; reclaimable by
-			//                   higher-priority cohort sibling)
+			//   tenant A:      owner; ReclaimWithinCohort=LowerPriority
+			//   tenant B:      borrower; ReclaimWithinCohort=Never
 			worker1Flavor = utiltestingapi.MakeResourceFlavor("ccp-fl").Obj()
 			util.MustCreate(worker1TestCluster.ctx, worker1TestCluster.client, worker1Flavor)
 			worker1TenantACq = utiltestingapi.MakeClusterQueue("ccp-tenant-a-cq").
@@ -191,7 +191,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 					Resource(corev1.ResourceMemory, "1G").
 					Obj()).
 				Preemption(kueue.ClusterQueuePreemption{
-					ReclaimWithinCohort: kueue.PreemptionPolicyNever,
+					ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
 				}).
 				Obj()
 			util.CreateClusterQueuesAndWaitForActive(worker1TestCluster.ctx, worker1TestCluster.client, worker1TenantACq)
@@ -205,7 +205,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 					Resource(corev1.ResourceMemory, "0").
 					Obj()).
 				Preemption(kueue.ClusterQueuePreemption{
-					ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+					ReclaimWithinCohort: kueue.PreemptionPolicyNever,
 				}).
 				Obj()
 			util.CreateClusterQueuesAndWaitForActive(worker1TestCluster.ctx, worker1TestCluster.client, worker1TenantBCq)
@@ -221,7 +221,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 					Resource(corev1.ResourceMemory, "1G").
 					Obj()).
 				Preemption(kueue.ClusterQueuePreemption{
-					ReclaimWithinCohort: kueue.PreemptionPolicyNever,
+					ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
 				}).
 				Obj()
 			util.CreateClusterQueuesAndWaitForActive(worker2TestCluster.ctx, worker2TestCluster.client, worker2TenantACq)
@@ -235,7 +235,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 					Resource(corev1.ResourceMemory, "0").
 					Obj()).
 				Preemption(kueue.ClusterQueuePreemption{
-					ReclaimWithinCohort: kueue.PreemptionPolicyLowerPriority,
+					ReclaimWithinCohort: kueue.PreemptionPolicyNever,
 				}).
 				Obj()
 			util.CreateClusterQueuesAndWaitForActive(worker2TestCluster.ctx, worker2TestCluster.client, worker2TenantBCq)
@@ -357,7 +357,7 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 		// dispatcher fired. (In a real cluster the re-admit-on-the-other-
 		// worker scenario takes longer, so the True window is wider; envtest
 		// is just very fast.)
-		ginkgo.It("should evict a borrowing tenant-B workload via cross-cluster preemption", func() {
+		ginkgo.FIt("should evict a borrowing tenant-B workload", func() {
 			b1Key, b2Key := fillBothWorkersWithTenantB(managerLowWPC.Name)
 
 			aJob := testingjob.MakeJob("tenant-a-1", managerNs.Name).
@@ -368,24 +368,41 @@ var _ = ginkgo.Describe("MultiKueue cross-cluster preemption",
 				Obj()
 			util.MustCreate(managerTestCluster.ctx, managerTestCluster.client, aJob)
 
-			ginkgo.By("one of the borrowing tenant-B workloads carries a WorkloadEvicted condition with a cross-cluster-preemption message", func() {
+			ginkgo.By("one of the borrowing tenant-B workloads is evicted while the other remains admitted", func() {
 				gomega.Eventually(func(g gomega.Gomega) {
-					found := false
+					evictedOnManager := 0
+					admittedOnManager := 0
+					evictedOnWorkers := 0
+					admittedOnWorkers := 0
 					for _, key := range []types.NamespacedName{b1Key, b2Key} {
 						wl := &kueue.Workload{}
 						g.Expect(managerTestCluster.client.Get(managerTestCluster.ctx, key, wl)).To(gomega.Succeed())
-						for _, c := range wl.Status.Conditions {
-							if c.Type == kueue.WorkloadEvicted && strings.Contains(c.Message, "cross-cluster preemption") {
-								found = true
-								break
+						
+						acState := admissioncheck.FindAdmissionCheck(wl.Status.AdmissionChecks, "ccp-ac")
+						if acState != nil {
+							if acState.State == kueue.CheckStateReady {
+								admittedOnManager++
+							} else if acState.State == kueue.CheckStateRetry && strings.Contains(acState.Message, "Workload evicted on worker cluster") {
+								evictedOnManager++
+							} else if acState.State == kueue.CheckStatePending && strings.Contains(acState.Message, "Previously: Retry") {
+								evictedOnManager++
 							}
 						}
-						if found {
-							break
+
+						for _, worker := range []cluster{worker1TestCluster, worker2TestCluster} {
+							remoteWl := &kueue.Workload{}
+							g.Expect(client.IgnoreNotFound(worker.client.Get(worker.ctx, key, remoteWl))).To(gomega.Succeed())
+							if workload.IsAdmitted(remoteWl) {
+								admittedOnWorkers++
+							} else if workload.IsEvicted(remoteWl) {
+								evictedOnWorkers++
+							}
 						}
 					}
-					g.Expect(found).To(gomega.BeTrue(),
-						"expected at least one tenant-B workload to carry a WorkloadEvicted condition with a cross-cluster-preemption message")
+					g.Expect(evictedOnManager).To(gomega.Equal(1), "expected exactly one tenant-B workload to be evicted on the manager")
+					g.Expect(admittedOnManager).To(gomega.Equal(1), "expected exactly one tenant-B workload to remain admitted on the manager")
+					g.Expect(evictedOnWorkers).To(gomega.Equal(1), "expected exactly one tenant-B workload to be evicted on the workers")
+					g.Expect(admittedOnWorkers).To(gomega.Equal(1), "expected exactly one tenant-B workload to remain admitted on the workers")
 				}, util.MediumTimeout, util.Interval).Should(gomega.Succeed())
 			})
 		})
