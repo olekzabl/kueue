@@ -874,6 +874,7 @@ func (s *TASFlavorSnapshot) findTopologyAssignment(
 		assumedUsage:              assumedUsage,
 		requiredReplacementDomain: requiredReplacementDomain,
 		simulateEmpty:             simulateEmpty,
+		podTemplate:               &workersTasPodSetRequests.PodSet.Template,
 	}
 	state := &findTopologyAssignmentState{
 		topologyAssignmentParameters: topologyAssignmentParameters{
