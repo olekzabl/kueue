@@ -75,7 +75,6 @@ func (t *nodesCache) find(nodeLabels map[string]string, levels []string) []*node
 func (t *nodesCache) getAllTASNodes(flavors map[kueue.ResourceFlavorReference]*TASFlavorCache) []*nodeInfo {
 	t.lock.RLock()
 	defer t.lock.RUnlock()
-
 	nodes := make([]*nodeInfo, 0, len(t.nodes))
 	for _, n := range t.nodes {
 		for _, flavor := range flavors {

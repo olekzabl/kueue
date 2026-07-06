@@ -28,12 +28,17 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/sets"
 
+	schedulerMetrics "k8s.io/kubernetes/pkg/scheduler/metrics"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/cache/hierarchy"
+	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/resources"
+	tas "sigs.k8s.io/kueue/pkg/util/tas"
 	utiltesting "sigs.k8s.io/kueue/pkg/util/testing"
 	utiltestingapi "sigs.k8s.io/kueue/pkg/util/testing/v1beta2"
+	testingnode "sigs.k8s.io/kueue/pkg/util/testingjobs/node"
 	"sigs.k8s.io/kueue/pkg/workload"
+	schedulerlibrary "sigs.k8s.io/scheduler-library/pkg/snapshot"
 )
 
 var snapCmpOpts = cmp.Options{
@@ -42,6 +47,7 @@ var snapCmpOpts = cmp.Options{
 	cmpopts.IgnoreUnexported(hierarchy.ClusterQueue[*CohortSnapshot]{}),
 	cmpopts.IgnoreUnexported(hierarchy.Manager[*ClusterQueueSnapshot, *CohortSnapshot]{}),
 	cmpopts.IgnoreFields(metav1.Condition{}, "LastTransitionTime"),
+	cmpopts.IgnoreFields(Snapshot{}, "WASSnapshot"),
 }
 
 func TestSnapshot(t *testing.T) {
@@ -1707,5 +1713,301 @@ func TestSnapshotAddRemoveWorkloadWithLendingLimit(t *testing.T) {
 				t.Errorf("Unexpected snapshot state after operations (-want,+got):\n%s", diff)
 			}
 		})
+	}
+}
+
+func TestSnapshotSchedulerLibraryIntegration(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.SchedulerLibraryIntegration, true)
+	schedulerMetrics.Register()
+	ctx, log := utiltesting.ContextWithLog(t)
+
+	nodes := []corev1.Node{
+		*testingnode.MakeNode("node-1").
+			Label("kubernetes.io/hostname", "node-1").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:  resource.MustParse("2"),
+				corev1.ResourcePods: resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+	}
+
+	rf := utiltestingapi.MakeResourceFlavor("tas-flavor").
+		TopologyName("topology").
+		Obj()
+
+	topology := utiltestingapi.MakeDefaultOneLevelTopology("topology")
+
+	now := time.Now().Truncate(time.Second)
+	wl := utiltestingapi.MakeWorkload("wl", "default").
+		PodSets(*utiltestingapi.MakePodSet("main", 1).
+			Request(corev1.ResourceCPU, "1500m").
+			Obj()).
+		ReserveQuotaAt(utiltestingapi.MakeAdmission("cq").
+			PodSets(utiltestingapi.MakePodSetAssignment("main").
+				Assignment(corev1.ResourceCPU, "tas-flavor", "1500m").
+				Count(1).
+				TopologyAssignment(utiltestingapi.MakeTopologyAssignment([]string{"kubernetes.io/hostname"}).
+					Domain(tas.TopologyDomainAssignment{
+						Values: []string{"node-1"},
+						Count:  1,
+					}).
+					Obj()).
+				Obj()).
+			Obj(), now).
+		AdmittedAt(true, now).
+		Obj()
+
+	cq := utiltestingapi.MakeClusterQueue("cq").
+		ResourceGroup(
+			*utiltestingapi.MakeFlavorQuotas("tas-flavor").
+				Resource(corev1.ResourceCPU, "2").
+				Obj(),
+		).
+		Obj()
+
+	simulator, err := NewSchedulingSimulator(ctx)
+	if err != nil {
+		t.Fatalf("Failed to initialize scheduling simulator: %v", err)
+	}
+	cache := New(utiltesting.NewFakeClient(wl), WithSchedulingSimulator(simulator))
+	cache.tasCache.SyncNode(&nodes[0])
+
+	if err := cache.AddClusterQueue(ctx, cq); err != nil {
+		t.Fatalf("Failed adding ClusterQueue: %v", err)
+	}
+	cache.AddOrUpdateResourceFlavor(log, rf)
+	cache.AddOrUpdateTopology(log, topology)
+	cache.AddOrUpdateWorkload(log, wl)
+
+	snapshot, err := cache.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error while building snapshot: %v", err)
+	}
+
+	cqSnap := snapshot.ClusterQueues()["cq"]
+	if cqSnap == nil {
+		t.Fatal("expected ClusterQueueSnapshot to exist")
+	}
+
+	tasSnap := cqSnap.TASFlavors["tas-flavor"]
+	if tasSnap == nil {
+		t.Fatal("expected TASFlavorSnapshot to exist")
+	}
+
+	if tasSnap.wasSnapshot == nil {
+		t.Fatal("expected schedulingSnapshot to be initialized when SchedulerLibraryIntegration is enabled")
+	}
+
+	podCannotFit := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-cannot-fit",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			SchedulerName: "default-scheduler",
+			Containers: []corev1.Container{
+				{
+					Name: "c",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU: resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
+	}
+	schedPodCannotFit := schedulerlibrary.SchedulablePod{
+		Pod:                podCannotFit,
+		CandidateNodeNames: []string{"node-1"},
+	}
+
+	nodesWithCapacity1, _, err := tasSnap.wasSnapshot.CanSchedulePod(ctx, schedPodCannotFit)
+	if err != nil {
+		t.Fatalf("unexpected error from CanSchedulePod: %v", err)
+	}
+	if len(nodesWithCapacity1) > 0 {
+		t.Errorf("expected pod requesting 1.0 CPU to not schedule on node-1, but it scheduled on: %v", nodesWithCapacity1)
+	}
+
+	podCanFit := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-can-fit",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			SchedulerName: "default-scheduler",
+			Containers: []corev1.Container{
+				{
+					Name: "c",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU: resource.MustParse("0.5"),
+						},
+					},
+				},
+			},
+		},
+	}
+	schedPodCanFit := schedulerlibrary.SchedulablePod{
+		Pod:                podCanFit,
+		CandidateNodeNames: []string{"node-1"},
+	}
+
+	nodesWithCapacity2, _, err := tasSnap.wasSnapshot.CanSchedulePod(ctx, schedPodCanFit)
+	if err != nil {
+		t.Fatalf("unexpected error from CanSchedulePod: %v", err)
+	}
+	if len(nodesWithCapacity2) != 1 || nodesWithCapacity2[0] != "node-1" {
+		t.Errorf("expected pod requesting 0.5 CPU to schedule on node-1, but got: %v", nodesWithCapacity2)
+	}
+}
+
+func TestSnapshotSchedulerLibraryIntegration_QuotaReservedOnly(t *testing.T) {
+	features.SetFeatureGateDuringTest(t, features.SchedulerLibraryIntegration, true)
+	schedulerMetrics.Register()
+	ctx, log := utiltesting.ContextWithLog(t)
+
+	nodes := []corev1.Node{
+		*testingnode.MakeNode("node-1").
+			Label("kubernetes.io/hostname", "node-1").
+			StatusAllocatable(corev1.ResourceList{
+				corev1.ResourceCPU:  resource.MustParse("2"),
+				corev1.ResourcePods: resource.MustParse("10"),
+			}).
+			Ready().
+			Obj(),
+	}
+
+	rf := utiltestingapi.MakeResourceFlavor("tas-flavor").
+		TopologyName("topology").
+		Obj()
+
+	topology := utiltestingapi.MakeDefaultOneLevelTopology("topology")
+
+	now := time.Now().Truncate(time.Second)
+	wl := utiltestingapi.MakeWorkload("wl", "default").
+		PodSets(*utiltestingapi.MakePodSet("main", 1).
+			Request(corev1.ResourceCPU, "1500m").
+			Obj()).
+		ReserveQuotaAt(utiltestingapi.MakeAdmission("cq").
+			PodSets(utiltestingapi.MakePodSetAssignment("main").
+				Assignment(corev1.ResourceCPU, "tas-flavor", "1500m").
+				Count(1).
+				TopologyAssignment(utiltestingapi.MakeTopologyAssignment([]string{"kubernetes.io/hostname"}).
+					Domain(tas.TopologyDomainAssignment{
+						Values: []string{"node-1"},
+						Count:  1,
+					}).
+					Obj()).
+				Obj()).
+			Obj(), now).
+		// NOT AdmittedAt
+		Obj()
+
+	cq := utiltestingapi.MakeClusterQueue("cq").
+		ResourceGroup(
+			*utiltestingapi.MakeFlavorQuotas("tas-flavor").
+				Resource(corev1.ResourceCPU, "2").
+				Obj(),
+		).
+		Obj()
+
+	simulator, err := NewSchedulingSimulator(ctx)
+	if err != nil {
+		t.Fatalf("Failed to initialize scheduling simulator: %v", err)
+	}
+	cache := New(utiltesting.NewFakeClient(wl), WithSchedulingSimulator(simulator))
+	cache.tasCache.SyncNode(&nodes[0])
+
+	if err := cache.AddClusterQueue(ctx, cq); err != nil {
+		t.Fatalf("Failed adding ClusterQueue: %v", err)
+	}
+	cache.AddOrUpdateResourceFlavor(log, rf)
+	cache.AddOrUpdateTopology(log, topology)
+	cache.AddOrUpdateWorkload(log, wl)
+
+	snapshot, err := cache.Snapshot(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error while building snapshot: %v", err)
+	}
+
+	cqSnap := snapshot.ClusterQueues()["cq"]
+	if cqSnap == nil {
+		t.Fatal("expected ClusterQueueSnapshot to exist")
+	}
+
+	tasSnap := cqSnap.TASFlavors["tas-flavor"]
+	if tasSnap == nil {
+		t.Fatal("expected TASFlavorSnapshot to exist")
+	}
+
+	if tasSnap.wasSnapshot == nil {
+		t.Fatal("expected schedulingSnapshot to be initialized when SchedulerLibraryIntegration is enabled")
+	}
+
+	podCannotFit := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-cannot-fit",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			SchedulerName: "default-scheduler",
+			Containers: []corev1.Container{
+				{
+					Name: "c",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU: resource.MustParse("1"),
+						},
+					},
+				},
+			},
+		},
+	}
+	schedPodCannotFit := schedulerlibrary.SchedulablePod{
+		Pod:                podCannotFit,
+		CandidateNodeNames: []string{"node-1"},
+	}
+
+	nodesWithCapacity1, _, err := tasSnap.wasSnapshot.CanSchedulePod(ctx, schedPodCannotFit)
+	if err != nil {
+		t.Fatalf("unexpected error from CanSchedulePod: %v", err)
+	}
+	if len(nodesWithCapacity1) > 0 {
+		t.Errorf("expected pod requesting 1.0 CPU to not schedule on node-1, but it scheduled on: %v", nodesWithCapacity1)
+	}
+
+	podCanFit := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-pod-can-fit",
+			Namespace: "default",
+		},
+		Spec: corev1.PodSpec{
+			SchedulerName: "default-scheduler",
+			Containers: []corev1.Container{
+				{
+					Name: "c",
+					Resources: corev1.ResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU: resource.MustParse("0.5"),
+						},
+					},
+				},
+			},
+		},
+	}
+	schedPodCanFit := schedulerlibrary.SchedulablePod{
+		Pod:                podCanFit,
+		CandidateNodeNames: []string{"node-1"},
+	}
+
+	nodesWithCapacity2, _, err := tasSnap.wasSnapshot.CanSchedulePod(ctx, schedPodCanFit)
+	if err != nil {
+		t.Fatalf("unexpected error from CanSchedulePod: %v", err)
+	}
+	if len(nodesWithCapacity2) != 1 || nodesWithCapacity2[0] != "node-1" {
+		t.Errorf("expected pod requesting 0.5 CPU to schedule on node-1, but got: %v", nodesWithCapacity2)
 	}
 }

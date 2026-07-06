@@ -22,6 +22,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"sigs.k8s.io/kueue/pkg/resources"
@@ -39,6 +40,7 @@ type nonTasUsageCache struct {
 type podUsageValue struct {
 	node  string
 	usage resources.Requests
+	pod   *corev1.Pod
 }
 
 // update may add a pod to the cache, or
@@ -69,6 +71,7 @@ func (n *nonTasUsageCache) update(pod *corev1.Pod, log logr.Logger) {
 	n.podUsage[key] = podUsageValue{
 		node:  pod.Spec.NodeName,
 		usage: requests,
+		pod:   pod,
 	}
 	n.addNodeUsage(pod.Spec.NodeName, requests)
 }
@@ -117,4 +120,14 @@ func (n *nonTasUsageCache) removeNodeUsage(node string, usage resources.Requests
 		}
 		delete(n.nodeUsage, node)
 	}
+}
+
+func (n *nonTasUsageCache) getPods() []*corev1.Pod {
+	n.lock.RLock()
+	defer n.lock.RUnlock()
+	var pods []*corev1.Pod
+	for _, v := range n.podUsage {
+		pods = append(pods, v.pod)
+	}
+	return pods
 }

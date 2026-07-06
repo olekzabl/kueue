@@ -34,6 +34,7 @@ import (
 	"k8s.io/utils/clock"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/scheduler-library/pkg/snapshot"
 
 	config "sigs.k8s.io/kueue/apis/config/v1beta2"
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
@@ -110,9 +111,10 @@ func New(
 }
 
 type Target struct {
-	WorkloadInfo *workload.Info
-	Reason       string
-	WorkloadCq   *schdcache.ClusterQueueSnapshot
+	WorkloadInfo     *workload.Info
+	Reason           string
+	WorkloadCq       *schdcache.ClusterQueueSnapshot
+	TASUnpreemptions *snapshot.Unpreemption
 }
 
 // ensures that Target implements ObjectRefProvider interface at compile time
@@ -311,30 +313,83 @@ func (p *Preemptor) classicalPreemptions(preemptionCtx *preemptionCtx) []*Target
 
 	for _, attemptOpts := range attemptPossibleOpts {
 		var targets []*Target
-		candidatesGenerator.Reset()
-		for candidate, reason := candidatesGenerator.Next(attemptOpts.borrowing); candidate != nil; candidate, reason = candidatesGenerator.Next(attemptOpts.borrowing) {
-			preemptionCtx.snapshot.RemoveWorkload(candidate)
-			targets = append(targets, &Target{
-				WorkloadInfo: candidate,
-				Reason:       reason,
-				WorkloadCq:   preemptionCtx.snapshot.ClusterQueue(candidate.ClusterQueue),
-			})
-			if workloadFits(preemptionCtx, attemptOpts.borrowing) {
-				targets = fillBackWorkloads(preemptionCtx, targets, attemptOpts.borrowing)
-				restoreSnapshot(preemptionCtx.snapshot, targets)
-				return targets
+
+		experimentBody := func() (snapshot.TransactionResult, error) {
+			candidatesGenerator.Reset()
+			for candidate, reason := candidatesGenerator.Next(attemptOpts.borrowing); candidate != nil; candidate, reason = candidatesGenerator.Next(attemptOpts.borrowing) {
+				preemptionCtx.snapshot.RemoveWorkload(candidate)
+				unpreemptions := preemptInWAS(context.Background(), preemptionCtx.log, preemptionCtx.snapshot.WASSnapshot, candidate)
+
+				targets = append(targets, &Target{
+					WorkloadInfo:     candidate,
+					Reason:           reason,
+					WorkloadCq:       preemptionCtx.snapshot.ClusterQueue(candidate.ClusterQueue),
+					TASUnpreemptions: unpreemptions,
+				})
+
+				if workloadFits(preemptionCtx, attemptOpts.borrowing) {
+					targets = fillBackWorkloads(preemptionCtx, preemptionCtx.snapshot.WASSnapshot, targets, attemptOpts.borrowing)
+					restoreSnapshot(preemptionCtx.snapshot, targets)
+					return snapshot.Revert, nil // Break out of experiment and automatically rollback WAS cache
+				}
 			}
+			restoreSnapshot(preemptionCtx.snapshot, targets)
+			targets = nil               // Clear targets so we try the next attemptOpts
+			return snapshot.Revert, nil // Automatic rollback
 		}
-		restoreSnapshot(preemptionCtx.snapshot, targets)
+
+		if preemptionCtx.snapshot.WASSnapshot != nil {
+			_ = preemptionCtx.snapshot.WASSnapshot.Transaction(context.Background(), experimentBody)
+		} else {
+			_, _ = experimentBody()
+		}
+
+		if len(targets) > 0 {
+			return targets
+		}
 	}
 	return nil
 }
 
-func fillBackWorkloads(preemptionCtx *preemptionCtx, targets []*Target, allowBorrowing bool) []*Target {
+func preemptInWAS(ctx context.Context, log logr.Logger, wasSnap *snapshot.ClusterSnapshot, wl *workload.Info) *snapshot.Unpreemption {
+	if wasSnap == nil || !workload.HasQuotaReservation(wl.Obj) {
+		return nil
+	}
+	pods := schdcache.TASPodsForWorkload(wl)
+	if len(pods) == 0 {
+		return nil
+	}
+	u, err := wasSnap.PreemptPods(ctx, pods)
+	if err != nil {
+		log.Error(err, "Failed to preempt pods", "targetWorkload", klog.KObj(wl.Obj))
+	}
+	return u
+}
+
+func fillBackWorkloads(preemptionCtx *preemptionCtx, wasSnapshot *snapshot.ClusterSnapshot, targets []*Target, allowBorrowing bool) []*Target {
 	// In the reverse order, check if any of the workloads can be added back.
 	for i := len(targets) - 2; i >= 0; i-- {
 		preemptionCtx.snapshot.AddWorkload(targets[i].WorkloadInfo)
-		if workloadFits(preemptionCtx, allowBorrowing) {
+
+		var fits bool
+		if wasSnapshot != nil && targets[i].TASUnpreemptions != nil {
+			unpreemptedPods, err := wasSnapshot.Unpreempt(targets[i].TASUnpreemptions)
+			if err != nil {
+				preemptionCtx.log.Error(err, "Failed to unpreempt pods", "targetWorkload", klog.KObj(targets[i].WorkloadInfo.Obj))
+			}
+			fits = workloadFits(preemptionCtx, allowBorrowing)
+			if !fits && len(unpreemptedPods) > 0 {
+				var preemptErr error
+				targets[i].TASUnpreemptions, preemptErr = wasSnapshot.PreemptPods(context.Background(), unpreemptedPods)
+				if preemptErr != nil {
+					preemptionCtx.log.Error(preemptErr, "Failed to preempt pods", "targetWorkload", klog.KObj(targets[i].WorkloadInfo.Obj))
+				}
+			}
+		} else {
+			fits = workloadFits(preemptionCtx, allowBorrowing)
+		}
+
+		if fits {
 			// O(1) deletion: copy the last element into index i and reduce size.
 			targets[i] = targets[len(targets)-1]
 			targets = targets[:len(targets)-1]
@@ -345,9 +400,9 @@ func fillBackWorkloads(preemptionCtx *preemptionCtx, targets []*Target, allowBor
 	return targets
 }
 
-func restoreSnapshot(snapshot *schdcache.Snapshot, targets []*Target) {
+func restoreSnapshot(snap *schdcache.Snapshot, targets []*Target) {
 	for _, t := range targets {
-		snapshot.AddWorkload(t.WorkloadInfo)
+		snap.AddWorkload(t.WorkloadInfo)
 	}
 }
 
@@ -531,7 +586,7 @@ func (p *Preemptor) fairPreemptions(preemptionCtx *preemptionCtx, strategies []f
 		restoreSnapshot(preemptionCtx.snapshot, targets)
 		return nil
 	}
-	targets = fillBackWorkloads(preemptionCtx, targets, true)
+	targets = fillBackWorkloads(preemptionCtx, preemptionCtx.snapshot.WASSnapshot, targets, true)
 	restoreSnapshot(preemptionCtx.snapshot, targets)
 
 	if logV := preemptionCtx.log.V(6); logV.Enabled() {

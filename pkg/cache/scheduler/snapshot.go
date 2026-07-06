@@ -23,6 +23,9 @@ import (
 	"slices"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/klog/v2"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -38,7 +41,7 @@ import (
 	utilmaps "sigs.k8s.io/kueue/pkg/util/maps"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
-	k8sSchedulerSnapshot "sigs.k8s.io/scheduler-library/pkg/snapshot"
+	"sigs.k8s.io/scheduler-library/pkg/snapshot"
 )
 
 type inactiveCQReason string
@@ -53,7 +56,7 @@ type Snapshot struct {
 	hierarchy.Manager[*ClusterQueueSnapshot, *CohortSnapshot]
 	ResourceFlavors          map[kueue.ResourceFlavorReference]*kueue.ResourceFlavor
 	InactiveClusterQueueSets sets.Set[kueue.ClusterQueueReference]
-	SchedulingSnapshot       *k8sSchedulerSnapshot.ClusterSnapshot
+	WASSnapshot              *snapshot.ClusterSnapshot
 }
 
 // RemoveWorkload removes a workload from its corresponding ClusterQueue and
@@ -175,17 +178,6 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 		InactiveClusterQueueSets: sets.New[kueue.ClusterQueueReference](),
 	}
 
-	log := ctrl.LoggerFrom(ctx)
-
-	if c.schedulingSimulator != nil {
-		allNodes := c.tasCache.nodesCache.getAllTASNodes(c.tasCache.flavorCache)
-		if schedulingSnap, err := c.schedulingSimulator.NewClusterSnapshot(ctx, allNodes); err != nil {
-			log.V(3).Error(err, "Failed to initialize global cluster snapshot for TAS scheduler-library integration")
-		} else {
-			snap.SchedulingSnapshot = schedulingSnap
-		}
-	}
-
 	for _, cohort := range c.hm.Cohorts() {
 		if hierarchy.HasCycle(cohort) {
 			continue
@@ -197,6 +189,7 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 			snap.UpdateCohortEdge(cohort.Name, cohort.Parent().Name)
 		}
 	}
+	log := ctrl.LoggerFrom(ctx)
 	cqNames := c.hm.ClusterQueues()
 	for _, cq := range cqNames {
 		if reason := skipInactiveCQReason(cq); reason != "" {
@@ -205,6 +198,30 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 			continue
 		}
 	}
+	if c.schedulingSimulator != nil {
+		allNodes := c.tasCache.nodesCache.getAllTASNodes(c.tasCache.flavorCache)
+		tasNodesSet := sets.New[string]()
+		for _, node := range allNodes {
+			tasNodesSet.Insert(node.Name)
+		}
+
+		allPods := c.TASPods()
+		allPods = append(allPods, c.tasCache.NonTASPods()...)
+		var filteredPods []*corev1.Pod
+		for _, pod := range allPods {
+			if pod.Spec.NodeName != "" && !tasNodesSet.Has(pod.Spec.NodeName) {
+				continue
+			}
+			filteredPods = append(filteredPods, pod)
+		}
+
+		if schedulingSnap, err := c.schedulingSimulator.NewClusterSnapshot(ctx, filteredPods, allNodes); err != nil {
+			log.V(3).Error(err, "Failed to initialize global cluster snapshot for TAS scheduler-library integration")
+		} else {
+			snap.WASSnapshot = schedulingSnap
+		}
+	}
+
 	tasSnapshots := make(map[kueue.ResourceFlavorReference]*TASFlavorSnapshot)
 	if features.Enabled(features.TopologyAwareScheduling) {
 		var aggregatedDomainUsages map[utiltas.TopologyDomainID]resources.Requests
@@ -224,11 +241,12 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 			if features.Enabled(features.TASHandleOverlappingFlavors) && utiltas.IsLowestLevelHostname(cache.topology.Levels) {
 				aggregatedDomainUsagesForFlavor = aggregatedDomainUsages
 			}
+			flavorNodes := c.tasCache.nodesCache.find(cache.flavor.NodeLabels, cache.topology.Levels)
 			tasSnapshots[flavor] = cache.snapshot(
 				log,
-				c.tasCache.nodesCache.find(cache.flavor.NodeLabels, cache.topology.Levels),
+				flavorNodes,
 				aggregatedDomainUsagesForFlavor,
-				snap.SchedulingSnapshot,
+				snap.WASSnapshot,
 			)
 		}
 	}
@@ -254,7 +272,6 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 	}
 	// Shallow copy is enough
 	maps.Copy(snap.ResourceFlavors, c.resourceFlavors)
-
 	return &snap, nil
 }
 
@@ -348,4 +365,101 @@ func newCohortSnapshot(name kueue.CohortReference) *CohortSnapshot {
 		Name:   name,
 		Cohort: hierarchy.NewCohort[*ClusterQueueSnapshot](),
 	}
+}
+
+// TASPodsForWorkload generates deterministic *corev1.Pod representations for a workload's TAS assignments.
+func TASPodsForWorkload(wl *workload.Info) []*corev1.Pod {
+	var pods []*corev1.Pod
+	if !workload.HasQuotaReservation(wl.Obj) {
+		return pods
+	}
+	for _, psa := range wl.Obj.Status.Admission.PodSetAssignments {
+		if psa.TopologyAssignment == nil || !utiltas.IsLowestLevelHostname(psa.TopologyAssignment.Levels) {
+			continue
+		}
+		var podSetSpec *kueue.PodSet
+		for i := range wl.Obj.Spec.PodSets {
+			if wl.Obj.Spec.PodSets[i].Name == psa.Name {
+				podSetSpec = &wl.Obj.Spec.PodSets[i]
+				break
+			}
+		}
+		if podSetSpec == nil {
+			continue
+		}
+
+		podIndex := 0
+		for domain := range utiltas.InternalSeqFrom(psa.TopologyAssignment) {
+			nodeName := domain.Values[len(domain.Values)-1]
+			for range domain.Count {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Name:        fmt.Sprintf("%s-%s-%d", wl.Obj.Name, psa.Name, podIndex),
+						Namespace:   wl.Obj.Namespace,
+						UID:         types.UID(fmt.Sprintf("%s-%s-%d", wl.Obj.UID, psa.Name, podIndex)),
+						Labels:      maps.Clone(podSetSpec.Template.Labels),
+						Annotations: maps.Clone(podSetSpec.Template.Annotations),
+					},
+					Spec: *podSetSpec.Template.Spec.DeepCopy(),
+				}
+				pod.Spec.NodeName = nodeName
+				pods = append(pods, pod)
+				podIndex++
+			}
+		}
+	}
+	return pods
+}
+
+func (c *Cache) TASPods() []*corev1.Pod {
+	var pods []*corev1.Pod
+	// TODO: Most likely this can be optimized by using c.tasCache.flavorCache.wlUsage.
+	// (We'll still need to look up workload details in c.hm.ClusterQueues();
+	// however, we'll loop only over admitted TAS workloads instead of all workloads).
+	// Postponing for now as it'd require careful verification, and some safety measures.
+	// (E.g. defending against nils; synchronizing access to wlUsage).
+	for _, cq := range c.hm.ClusterQueues() {
+		for _, wlInfo := range cq.Workloads {
+			wl := wlInfo.Obj
+			if !workload.HasQuotaReservation(wl) {
+				continue
+			}
+			for _, psa := range wl.Status.Admission.PodSetAssignments {
+				if psa.TopologyAssignment == nil || !utiltas.IsLowestLevelHostname(psa.TopologyAssignment.Levels) {
+					continue
+				}
+				var podSetSpec *kueue.PodSet
+				for i := range wl.Spec.PodSets {
+					if wl.Spec.PodSets[i].Name == psa.Name {
+						podSetSpec = &wl.Spec.PodSets[i]
+						break
+					}
+				}
+				if podSetSpec == nil {
+					continue
+				}
+
+				podIndex := 0
+				for domain := range utiltas.InternalSeqFrom(psa.TopologyAssignment) {
+					nodeName := domain.Values[len(domain.Values)-1]
+					for range domain.Count {
+						pod := &corev1.Pod{
+							ObjectMeta: metav1.ObjectMeta{
+								Name:        fmt.Sprintf("%s-%s-%d", wl.Name, psa.Name, podIndex),
+								Namespace:   wl.Namespace,
+								UID:         types.UID(fmt.Sprintf("%s-%s-%d", wl.UID, psa.Name, podIndex)),
+								Labels:      maps.Clone(podSetSpec.Template.Labels),
+								Annotations: maps.Clone(podSetSpec.Template.Annotations),
+							},
+							Spec: *podSetSpec.Template.Spec.DeepCopy(),
+						}
+						pod.Spec.NodeName = nodeName
+						pods = append(pods, pod)
+						podIndex++
+					}
+				}
+			}
+		}
+	}
+	return pods
 }

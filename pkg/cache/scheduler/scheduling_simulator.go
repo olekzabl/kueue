@@ -4,12 +4,13 @@ import (
 	"context"
 
 	corev1 "k8s.io/api/core/v1"
-	schedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
+	schedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodeaffinity"
+	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/noderesources"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/tainttoleration"
 	"sigs.k8s.io/scheduler-library/pkg/simulator"
@@ -36,11 +37,27 @@ func NewSchedulingSimulator(ctx context.Context) (*SchedulingSimulator, error) {
 						Enabled: []schedulerconfig.Plugin{
 							{Name: tainttoleration.Name},
 							{Name: nodeaffinity.Name},
+							{Name: noderesources.Name},
 						},
 					},
 					PreFilter: schedulerconfig.PluginSet{
 						Enabled: []schedulerconfig.Plugin{
 							{Name: nodeaffinity.Name},
+							{Name: noderesources.Name},
+						},
+					},
+				},
+				PluginConfig: []schedulerconfig.PluginConfig{
+					{
+						Name: nodeaffinity.Name,
+						Args: &schedulerconfig.NodeAffinityArgs{},
+					},
+					{
+						Name: noderesources.Name,
+						Args: &schedulerconfig.NodeResourcesFitArgs{
+							ScoringStrategy: &schedulerconfig.ScoringStrategy{
+								Type: schedulerconfig.LeastAllocated,
+							},
 						},
 					},
 				},
@@ -62,10 +79,10 @@ func NewSchedulingSimulator(ctx context.Context) (*SchedulingSimulator, error) {
 	return &SchedulingSimulator{sim: sim}, nil
 }
 
-func (s *SchedulingSimulator) NewClusterSnapshot(ctx context.Context, nodes []*nodeInfo) (*snapshot.ClusterSnapshot, error) {
+func (s *SchedulingSimulator) NewClusterSnapshot(ctx context.Context, pods []*corev1.Pod, nodes []*nodeInfo) (*snapshot.ClusterSnapshot, error) {
 	var v1Nodes []*corev1.Node
 	for _, n := range nodes {
 		v1Nodes = append(v1Nodes, n.toNode())
 	}
-	return s.sim.NewClusterSnapshot(ctx, nil, v1Nodes)
+	return s.sim.NewClusterSnapshot(ctx, pods, v1Nodes)
 }

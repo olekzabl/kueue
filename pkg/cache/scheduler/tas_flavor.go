@@ -24,13 +24,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	k8sSchedulerSnapshot "sigs.k8s.io/scheduler-library/pkg/snapshot"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	"sigs.k8s.io/kueue/pkg/features"
 	"sigs.k8s.io/kueue/pkg/resources"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
+	"sigs.k8s.io/scheduler-library/pkg/snapshot"
 )
 
 // usageOp indicates whether we should add or subtract the usage.
@@ -96,12 +96,12 @@ type TASFlavorCache struct {
 func (t *tasCache) NewTASFlavorCache(topologyInfo topologyInformation,
 	flavorInfo flavorInformation) *TASFlavorCache {
 	return &TASFlavorCache{
-		client:              t.client,
-		topology:            topologyInfo,
-		flavor:              flavorInfo,
-		usage:               make(map[utiltas.TopologyDomainID]resources.Requests),
-		wlUsage:             make(map[workload.Reference][]workload.TopologyDomainRequests),
-		nonTasUsageCache:    t.nonTasUsageCache,
+		client:           t.client,
+		topology:         topologyInfo,
+		flavor:           flavorInfo,
+		usage:            make(map[utiltas.TopologyDomainID]resources.Requests),
+		wlUsage:          make(map[workload.Reference][]workload.TopologyDomainRequests),
+		nonTasUsageCache: t.nonTasUsageCache,
 	}
 }
 
@@ -118,7 +118,8 @@ func (c *TASFlavorCache) TopologyLevels() []string {
 }
 
 func (c *TASFlavorCache) snapshot(
-	log logr.Logger, nodes []*nodeInfo, aggregatedDomainUsages map[utiltas.TopologyDomainID]resources.Requests, schedulingSnapshot *k8sSchedulerSnapshot.ClusterSnapshot,
+	log logr.Logger, nodes []*nodeInfo, aggregatedDomainUsages map[utiltas.TopologyDomainID]resources.Requests,
+	wasSnapshot *snapshot.ClusterSnapshot,
 ) *TASFlavorSnapshot {
 	c.RLock()
 	defer c.RUnlock()
@@ -133,7 +134,7 @@ func (c *TASFlavorCache) snapshot(
 	}
 	log.V(3).Info("Constructing TAS snapshot", infoKV...)
 
-	snapshot := newTASFlavorSnapshot(log, c.flavor.TopologyName, c.topology.Levels, withTolerations(c.flavor.Tolerations), withSchedulingSnapshot(schedulingSnapshot))
+	snapshot := newTASFlavorSnapshot(log, c.flavor.TopologyName, c.topology.Levels, withTolerations(c.flavor.Tolerations), withWASSnapshot(wasSnapshot))
 	nodeToDomain := make(map[string]utiltas.TopologyDomainID)
 	for _, node := range nodes {
 		nodeToDomain[node.Name] = snapshot.addNode(node)

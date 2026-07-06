@@ -24,6 +24,7 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
+
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
@@ -53,7 +54,7 @@ func NewTASCache(client client.Client) tasCache {
 			nodeUsage: make(map[string]resources.Requests),
 			lock:      sync.RWMutex{},
 		},
-		nodesCache:          newNodesCache(),
+		nodesCache: newNodesCache(),
 	}
 }
 
@@ -61,6 +62,10 @@ func (t *tasCache) Get(name kueue.ResourceFlavorReference) *TASFlavorCache {
 	t.RLock()
 	defer t.RUnlock()
 	return t.flavorCache[name]
+}
+
+func (t *tasCache) NonTASPods() []*corev1.Pod {
+	return t.nonTasUsageCache.getPods()
 }
 
 // Clone returns a shallow copy of the map

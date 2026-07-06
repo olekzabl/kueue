@@ -31,6 +31,8 @@ import (
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/uuid"
 	corev1helpers "k8s.io/component-helpers/scheduling/corev1"
 	"k8s.io/component-helpers/scheduling/corev1/nodeaffinity"
 	"k8s.io/utils/ptr"
@@ -141,13 +143,13 @@ type TASFlavorSnapshot struct {
 	// isLowestLevelNode indicates if kubernetes.io/hostname is the lowest topology level
 	isLowestLevelNode bool
 
-	// schedulingSnapshot is the snaphost of the cluster state used by the scheduler-library
-	schedulingSnapshot *snapshot.ClusterSnapshot
+	// wasSnapshot is the snaphost of the cluster state used by the scheduler-library
+	wasSnapshot *snapshot.ClusterSnapshot
 }
 
 type tasFlavorSnapshotOptions struct {
-	tolerations        []corev1.Toleration
-	schedulingSnapshot *snapshot.ClusterSnapshot
+	tolerations []corev1.Toleration
+	wasSnapshot *snapshot.ClusterSnapshot
 }
 
 type tasFlavorSnapshotOption func(*tasFlavorSnapshotOptions)
@@ -158,9 +160,9 @@ func withTolerations(tolerations []corev1.Toleration) tasFlavorSnapshotOption {
 	}
 }
 
-func withSchedulingSnapshot(schedulingSnapshot *snapshot.ClusterSnapshot) tasFlavorSnapshotOption {
+func withWASSnapshot(wasSnapshot *snapshot.ClusterSnapshot) tasFlavorSnapshotOption {
 	return func(o *tasFlavorSnapshotOptions) {
-		o.schedulingSnapshot = schedulingSnapshot
+		o.wasSnapshot = wasSnapshot
 	}
 }
 
@@ -179,16 +181,16 @@ func newTASFlavorSnapshot(log logr.Logger, topologyName kueue.TopologyReference,
 	}
 
 	snapshot := &TASFlavorSnapshot{
-		log:                log,
-		topologyName:       topologyName,
-		levelKeys:          slices.Clone(levels),
-		leaves:             make(leafDomainByID),
-		tolerations:        slices.Clone(options.tolerations),
-		domains:            make(domainByID),
-		roots:              make(domainByID),
-		domainsPerLevel:    domainsPerLevel,
-		isLowestLevelNode:  len(levels) > 0 && levels[len(levels)-1] == corev1.LabelHostname,
-		schedulingSnapshot: options.schedulingSnapshot,
+		log:               log,
+		topologyName:      topologyName,
+		levelKeys:         slices.Clone(levels),
+		leaves:            make(leafDomainByID),
+		tolerations:       slices.Clone(options.tolerations),
+		domains:           make(domainByID),
+		roots:             make(domainByID),
+		domainsPerLevel:   domainsPerLevel,
+		isLowestLevelNode: len(levels) > 0 && levels[len(levels)-1] == corev1.LabelHostname,
+		wasSnapshot:       options.wasSnapshot,
 	}
 	return snapshot
 }
@@ -488,7 +490,8 @@ type topologyAssignmentPodRequirements struct {
 	requiredReplacementDomain utiltas.TopologyDomainID
 	simulateEmpty             bool
 	// Used for SchedulerLibraryIntegration.
-	podTemplate *corev1.PodTemplateSpec
+	podTemplate       *corev1.PodTemplateSpec
+	leaderPodTemplate *corev1.PodTemplateSpec
 }
 
 // topologyAssignmentParameters stores placement-specific inputs that remain
@@ -888,6 +891,7 @@ func (s *TASFlavorSnapshot) findTopologyAssignment(
 	if leaderTasPodSetRequests != nil {
 		requirements.leaderRequests = new(leaderTasPodSetRequests.SinglePodRequests.Clone())
 		requirements.leaderRequests.Add(resources.Requests{corev1.ResourcePods: 1})
+		requirements.leaderPodTemplate = &leaderTasPodSetRequests.PodSet.Template
 		state.leaderCount = 1
 	}
 
@@ -1694,7 +1698,7 @@ func (s *TASFlavorSnapshot) fillInCounts(requirements *topologyAssignmentPodRequ
 	var candidateLeaves = make(map[string]*leafDomain)
 	var candidateNodeNames []string
 	var feasibleLeaves = make([]*leafDomain, 0, len(s.leaves))
-	shouldUseSchedulerLibrary := features.Enabled(features.SchedulerLibraryIntegration) && s.schedulingSnapshot != nil && requirements.podTemplate != nil
+	shouldUseSchedulerLibrary := features.Enabled(features.SchedulerLibraryIntegration) && s.wasSnapshot != nil && requirements.podTemplate != nil
 	for _, leaf := range s.leaves {
 		state.stats.TotalNodes++
 		if s.isLowestLevelNode {
@@ -1753,7 +1757,7 @@ func (s *TASFlavorSnapshot) fillInCounts(requirements *topologyAssignmentPodRequ
 			ObjectMeta: requirements.podTemplate.ObjectMeta,
 			Spec:       requirements.podTemplate.Spec,
 		}
-		feasibleNodeNames, _, err := s.schedulingSnapshot.CanSchedulePod(context.Background(), snapshot.SchedulablePod{
+		feasibleNodeNames, _, err := s.wasSnapshot.CanSchedulePod(context.Background(), snapshot.SchedulablePod{
 			Pod:                dummyPod,
 			CandidateNodeNames: candidateNodeNames,
 		})
@@ -1789,19 +1793,74 @@ func (s *TASFlavorSnapshot) fillInCounts(requirements *topologyAssignmentPodRequ
 		var limitingRes corev1.ResourceName
 		leaf.state, limitingRes = requirements.requests.CountInWithLimitingResource(remainingCapacity)
 
+		if leaf.state > 0 && shouldUseSchedulerLibrary {
+			opts := snapshot.NewSchedulePodsByTemplateOptions( /* DryRun */ true)
+			nodeName := leaf.node.toNode().Name
+			res, err := s.wasSnapshot.SchedulePodsByTemplate(context.Background(), requirements.podTemplate, []string{nodeName}, int(leaf.state), opts)
+			if err == nil {
+				leaf.state = int32(len(res))
+			} else {
+				s.log.Error(err, "SchedulePodsByTemplate failed", "node", nodeName)
+				leaf.state = 0
+			}
+		}
+
 		// Track resource exclusions: if this node can't fit even one pod,
 		// identify which resource is the bottleneck.
 		if leaf.state == 0 && limitingRes != "" {
 			state.stats.Resources[limitingRes]++
 		}
 
-		leaf.leaderState = 0
-		if requirements.leaderRequests != nil && requirements.leaderRequests.CountIn(remainingCapacity) > 0 {
+		if requirements.leaderRequests == nil || requirements.leaderRequests.CountIn(remainingCapacity) == 0 {
+			leaf.leaderState = 0
+			leaf.stateWithLeader = leaf.state
+		} else {
 			leaf.leaderState = 1
 			remainingCapacity.Sub(*requirements.leaderRequests)
-		}
 
-		leaf.stateWithLeader = requirements.requests.CountIn(remainingCapacity)
+			leaf.stateWithLeader = requirements.requests.CountIn(remainingCapacity)
+			if leaf.stateWithLeader > 0 && shouldUseSchedulerLibrary {
+				nodeName := leaf.node.toNode().Name
+
+				var pods []*snapshot.SchedulablePod
+				pods = append(pods, &snapshot.SchedulablePod{
+					Pod: &corev1.Pod{
+						ObjectMeta: *requirements.leaderPodTemplate.ObjectMeta.DeepCopy(),
+						Spec:       *requirements.leaderPodTemplate.Spec.DeepCopy(),
+					},
+					CandidateNodeNames: []string{nodeName},
+				})
+				pods[0].Pod.Name = "leader"
+				pods[0].Pod.UID = types.UID(uuid.NewUUID())
+
+				for i := 0; i < int(leaf.stateWithLeader); i++ {
+					pod := &corev1.Pod{
+						ObjectMeta: *requirements.podTemplate.ObjectMeta.DeepCopy(),
+						Spec:       *requirements.podTemplate.Spec.DeepCopy(),
+					}
+					pod.Name = fmt.Sprintf("worker-%d", i)
+					pod.UID = types.UID(uuid.NewUUID())
+					pods = append(pods, &snapshot.SchedulablePod{
+						Pod:                pod,
+						CandidateNodeNames: []string{nodeName},
+					})
+				}
+
+				opts := snapshot.NewSchedulePodsOptions( /* DryRun */ true /* StopOnFailure */, true)
+				res, err := s.wasSnapshot.SchedulePods(context.Background(), pods, opts)
+				if err != nil {
+					leaf.leaderState = 0
+					leaf.stateWithLeader = 0
+				} else {
+					if len(res) == 0 {
+						leaf.leaderState = 0
+						leaf.stateWithLeader = 0
+					} else {
+						leaf.stateWithLeader = int32(len(res) - 1)
+					}
+				}
+			}
+		}
 	}
 	for _, root := range s.roots {
 		s.fillInCountsHelper(root, state.sliceSize, state.sliceLevelIdx, 0, state.sliceSizeAtLevel, state.leaderCount > 0)
