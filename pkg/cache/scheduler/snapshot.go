@@ -38,6 +38,7 @@ import (
 	utilmaps "sigs.k8s.io/kueue/pkg/util/maps"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 	"sigs.k8s.io/kueue/pkg/workload"
+	k8sSchedulerSnapshot "sigs.k8s.io/scheduler-library/pkg/snapshot"
 )
 
 type inactiveCQReason string
@@ -52,6 +53,7 @@ type Snapshot struct {
 	hierarchy.Manager[*ClusterQueueSnapshot, *CohortSnapshot]
 	ResourceFlavors          map[kueue.ResourceFlavorReference]*kueue.ResourceFlavor
 	InactiveClusterQueueSets sets.Set[kueue.ClusterQueueReference]
+	SchedulingSnapshot       *k8sSchedulerSnapshot.ClusterSnapshot
 }
 
 // RemoveWorkload removes a workload from its corresponding ClusterQueue and
@@ -172,6 +174,18 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 		ResourceFlavors:          make(map[kueue.ResourceFlavorReference]*kueue.ResourceFlavor, len(c.resourceFlavors)),
 		InactiveClusterQueueSets: sets.New[kueue.ClusterQueueReference](),
 	}
+
+	log := ctrl.LoggerFrom(ctx)
+
+	if c.schedulingSimulator != nil {
+		allNodes := c.tasCache.nodesCache.getAllTASNodes(c.tasCache.flavorCache)
+		if schedulingSnap, err := c.schedulingSimulator.NewClusterSnapshot(ctx, allNodes); err != nil {
+			log.V(3).Error(err, "Failed to initialize global cluster snapshot for TAS scheduler-library integration")
+		} else {
+			snap.SchedulingSnapshot = schedulingSnap
+		}
+	}
+
 	for _, cohort := range c.hm.Cohorts() {
 		if hierarchy.HasCycle(cohort) {
 			continue
@@ -183,7 +197,6 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 			snap.UpdateCohortEdge(cohort.Name, cohort.Parent().Name)
 		}
 	}
-	log := ctrl.LoggerFrom(ctx)
 	cqNames := c.hm.ClusterQueues()
 	for _, cq := range cqNames {
 		if reason := skipInactiveCQReason(cq); reason != "" {
@@ -215,6 +228,7 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 				log,
 				c.tasCache.nodesCache.find(cache.flavor.NodeLabels, cache.topology.Levels),
 				aggregatedDomainUsagesForFlavor,
+				snap.SchedulingSnapshot,
 			)
 		}
 	}
@@ -240,6 +254,7 @@ func (c *Cache) Snapshot(ctx context.Context, options ...SnapshotOption) (*Snaps
 	}
 	// Shallow copy is enough
 	maps.Copy(snap.ResourceFlavors, c.resourceFlavors)
+
 	return &snap, nil
 }
 

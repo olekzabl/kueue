@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 
+	kueue "sigs.k8s.io/kueue/apis/kueue/v1beta2"
 	utiltas "sigs.k8s.io/kueue/pkg/util/tas"
 )
 
@@ -69,4 +70,20 @@ func (t *nodesCache) find(nodeLabels map[string]string, levels []string) []*node
 		}
 	}
 	return filteredNodes
+}
+
+func (t *nodesCache) getAllTASNodes(flavors map[kueue.ResourceFlavorReference]*TASFlavorCache) []*nodeInfo {
+	t.lock.RLock()
+	defer t.lock.RUnlock()
+
+	nodes := make([]*nodeInfo, 0, len(t.nodes))
+	for _, n := range t.nodes {
+		for _, flavor := range flavors {
+			if utiltas.NodeMatchesFlavor(n.Labels, flavor.flavor.NodeLabels, flavor.topology.Levels) {
+				nodes = append(nodes, n)
+				break
+			}
+		}
+	}
+	return nodes
 }

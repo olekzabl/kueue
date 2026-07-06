@@ -17,7 +17,6 @@ limitations under the License.
 package scheduler
 
 import (
-	"context"
 	"slices"
 	"sync"
 
@@ -92,8 +91,6 @@ type TASFlavorCache struct {
 	// nonTasUsageCache maintains the usage coming from non-TAS pods,
 	// e.g. static Pods or DaemonSet pods.
 	nonTasUsageCache *nonTasUsageCache
-
-	schedulingSimulator *SchedulingSimulator
 }
 
 func (t *tasCache) NewTASFlavorCache(topologyInfo topologyInformation,
@@ -105,7 +102,6 @@ func (t *tasCache) NewTASFlavorCache(topologyInfo topologyInformation,
 		usage:               make(map[utiltas.TopologyDomainID]resources.Requests),
 		wlUsage:             make(map[workload.Reference][]workload.TopologyDomainRequests),
 		nonTasUsageCache:    t.nonTasUsageCache,
-		schedulingSimulator: t.schedulingSimulator,
 	}
 }
 
@@ -122,7 +118,7 @@ func (c *TASFlavorCache) TopologyLevels() []string {
 }
 
 func (c *TASFlavorCache) snapshot(
-	log logr.Logger, nodes []*nodeInfo, aggregatedDomainUsages map[utiltas.TopologyDomainID]resources.Requests,
+	log logr.Logger, nodes []*nodeInfo, aggregatedDomainUsages map[utiltas.TopologyDomainID]resources.Requests, schedulingSnapshot *k8sSchedulerSnapshot.ClusterSnapshot,
 ) *TASFlavorSnapshot {
 	c.RLock()
 	defer c.RUnlock()
@@ -136,15 +132,6 @@ func (c *TASFlavorCache) snapshot(
 		infoKV = append(infoKV, "crossFlavorAggregation", aggregatedDomainUsages != nil)
 	}
 	log.V(3).Info("Constructing TAS snapshot", infoKV...)
-
-	var schedulingSnapshot *k8sSchedulerSnapshot.ClusterSnapshot
-	if c.schedulingSimulator != nil {
-		var err error
-		schedulingSnapshot, err = c.schedulingSimulator.NewClusterSnapshot(context.Background(), nodes)
-		if err != nil {
-			log.V(3).Error(err, "Failed to initialize cluster snapshot for TAS scheduler-library integration")
-		}
-	}
 
 	snapshot := newTASFlavorSnapshot(log, c.flavor.TopologyName, c.topology.Levels, withTolerations(c.flavor.Tolerations), withSchedulingSnapshot(schedulingSnapshot))
 	nodeToDomain := make(map[string]utiltas.TopologyDomainID)

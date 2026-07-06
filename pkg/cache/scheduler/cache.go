@@ -170,7 +170,7 @@ func New(client client.Client, options ...Option) *Cache {
 	for _, option := range options {
 		option(cache)
 	}
-	cache.tasCache = NewTASCache(client, cache.schedulingSimulator)
+	cache.tasCache = NewTASCache(client)
 	cache.podsReadyCond.L = &cache.RWMutex
 	return cache
 }
