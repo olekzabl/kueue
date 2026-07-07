@@ -5,6 +5,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	schedulerconfig "k8s.io/kubernetes/pkg/scheduler/apis/config"
+	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/client-go/rest"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/defaultbinder"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/nodeaffinity"
 	"k8s.io/kubernetes/pkg/scheduler/framework/plugins/queuesort"
@@ -45,7 +48,13 @@ func NewSchedulingSimulator(ctx context.Context) (*SchedulingSimulator, error) {
 		},
 	}
 
-	sim, err := simulator.NewSchedulingSimulator(ctx, cfg, nil)
+	rc, err := simulator.NewReadonlyClient(&rest.Config{})
+	if err != nil {
+		return nil, err
+	}
+	fakeClient := fake.NewSimpleClientset()
+	informerFactory := informers.NewSharedInformerFactory(fakeClient, 0)
+	sim, err := simulator.NewSchedulingSimulator(ctx, cfg, rc, informerFactory)
 	if err != nil {
 		return nil, err
 	}
