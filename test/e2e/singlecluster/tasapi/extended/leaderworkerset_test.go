@@ -304,7 +304,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for LeaderWorkerSet", ginkgo.La
 	})
 
 	ginkgo.When("creating a LeaderWorkerSet with leader grouped with workers with the same resource requests", func() {
-		ginkgo.It("should place pods based on the ranks-ordering", func() {
+		ginkgo.It("should place pods based on the ranks-ordering", ginkgo.Label("feature:was_deepintegration"), func() {
 			const (
 				replicas = int32(1)
 				size     = int32(4)
@@ -399,6 +399,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for LeaderWorkerSet", ginkgo.La
 					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
 					g.Expect(pods.Items).Should(gomega.HaveLen(int(podsTotalCount)))
 				}, behavioral.MediumTimeout, behavioral.Interval).Should(gomega.Succeed())
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, int(podsTotalCount))
 			})
 
 			ginkgo.By("verify the assignment of pods are as expected with rank-based ordering", func() {
@@ -422,7 +423,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for LeaderWorkerSet", ginkgo.La
 	})
 
 	ginkgo.When("creating a LeaderWorkerSet with leader grouped with workers with the different resource requests", func() {
-		ginkgo.It("should place pods based on the ranks-ordering", func() {
+		ginkgo.It("should place pods based on the ranks-ordering", ginkgo.Label("feature:was_deepintegration"), func() {
 			const (
 				replicas = int32(2)
 				size     = int32(4)
@@ -506,6 +507,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for LeaderWorkerSet", ginkgo.La
 					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
 					g.Expect(pods.Items).Should(gomega.HaveLen(int(podsTotalCount)))
 				}, behavioral.MediumTimeout, behavioral.Interval).Should(gomega.Succeed())
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, int(podsTotalCount))
 			})
 
 			ginkgo.By("verify the assignment of pods are as expected with rank-based ordering", func() {
@@ -543,7 +545,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for LeaderWorkerSet", ginkgo.La
 	})
 
 	ginkgo.When("creating a LeaderWorkerSet with leader grouped with sliced workers", func() {
-		ginkgo.It("should place sliced worker pods and leader based on topology constraints", func() {
+		ginkgo.It("should place sliced worker pods and leader based on topology constraints", ginkgo.Label("feature:was_deepintegration"), func() {
 			const (
 				replicas = int32(1)
 				size     = int32(5)
@@ -629,6 +631,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for LeaderWorkerSet", ginkgo.La
 					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
 					g.Expect(pods.Items).Should(gomega.HaveLen(int(podsTotalCount)))
 				}, behavioral.MediumTimeout, behavioral.Interval).Should(gomega.Succeed())
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, int(podsTotalCount))
 			})
 
 			ginkgo.By("verify the assignment of pods are as expected with rank-based ordering", func() {

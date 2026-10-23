@@ -86,7 +86,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 			behavioral.ExpectAllPodsInNamespaceDeleted(ctx, k8sClient, ns)
 		})
 
-		ginkgo.It("Should not admit a Job if Rack required", func() {
+		ginkgo.It("Should not admit a Job if Rack required", ginkgo.Label("feature:was_deepintegration"), func() {
 			sampleJob := testingjob.MakeJob("test-job", ns.Name).
 				Queue(kueue.LocalQueueName(localQueue.Name)).
 				Parallelism(3).
@@ -156,7 +156,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 			})
 		})
 
-		ginkgo.It("Should admit a Job to TAS Block if Block required", func() {
+		ginkgo.It("Should admit a Job to TAS Block if Block required", ginkgo.Label("feature:was_deepintegration"), func() {
 			sampleJob := testingjob.MakeJob("test-job", ns.Name).
 				Queue(kueue.LocalQueueName(localQueue.Name)).
 				Parallelism(3).
@@ -194,6 +194,10 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 						}})))
 			})
 
+			ginkgo.By("ensure all pods are created, scheduled, and running", func() {
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, 3, client.MatchingLabels{"job-name": sampleJob.Name})
+			})
+
 			ginkgo.By(fmt.Sprintf("verify the workload %q gets finished", wlLookupKey), func() {
 				gomega.Eventually(func(g gomega.Gomega) {
 					g.Expect(k8sClient.Get(ctx, wlLookupKey, createdWorkload)).Should(gomega.Succeed())
@@ -203,7 +207,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 			})
 		})
 
-		ginkgo.It("Should allow to run a Job with parallelism < completions", func() {
+		ginkgo.It("Should allow to run a Job with parallelism < completions", ginkgo.Label("feature:was_deepintegration"), func() {
 			sampleJob := testingjob.MakeJob("test-job", ns.Name).
 				Queue(kueue.LocalQueueName(localQueue.Name)).
 				Parallelism(2).
@@ -225,9 +229,13 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 					g.Expect(createdWorkload.Status.Conditions).Should(utiltesting.HaveConditionStatusTrue(kueue.WorkloadFinished))
 				}, behavioral.MediumTimeout, behavioral.Interval).Should(gomega.Succeed())
 			})
+
+			ginkgo.By("ensure all pods are created, scheduled, and running", func() {
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, 3, client.MatchingLabels{"job-name": sampleJob.Name})
+			})
 		})
 
-		ginkgo.It("Should place pods based on the ranks-ordering", func() {
+		ginkgo.It("Should place pods based on the ranks-ordering", ginkgo.Label("feature:was_deepintegration"), func() {
 			numPods := 4
 			sampleJob := testingjob.MakeJob("ranks-job", ns.Name).
 				Queue(kueue.LocalQueueName(localQueue.Name)).
@@ -265,6 +273,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
 					g.Expect(pods.Items).Should(gomega.HaveLen(numPods))
 				}, behavioral.MediumTimeout, behavioral.Interval).Should(gomega.Succeed())
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, numPods, client.MatchingLabels{"job-name": sampleJob.Name})
 			})
 
 			ginkgo.By("verify the assignment of pods are as expected with rank-based ordering", func() {
@@ -285,7 +294,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 			})
 		})
 
-		ginkgo.It("Should place pods based on the ranks-ordering even if the Job has no TAS annotation (Implicit TAS)", func() {
+		ginkgo.It("Should place pods based on the ranks-ordering even if the Job has no TAS annotation (Implicit TAS)", ginkgo.Label("feature:was_deepintegration"), func() {
 			numPods := 4
 			sampleJob := testingjob.MakeJob("ranks-job", ns.Name).
 				Queue(kueue.LocalQueueName(localQueue.Name)).
@@ -322,6 +331,7 @@ var _ = ginkgo.Describe("TopologyAwareScheduling for Job", ginkgo.Label(e2e.Shar
 					g.Expect(k8sClient.List(ctx, pods, client.InNamespace(ns.Name), listOpts)).To(gomega.Succeed())
 					g.Expect(pods.Items).Should(gomega.HaveLen(numPods))
 				}, behavioral.MediumTimeout, behavioral.Interval).Should(gomega.Succeed())
+				e2e.ExpectPodsScheduledAndRunning(ctx, k8sClient, ns.Name, numPods, client.MatchingLabels{"job-name": sampleJob.Name})
 			})
 
 			ginkgo.By("verify the assignment of pods are as expected with rank-based ordering", func() {
