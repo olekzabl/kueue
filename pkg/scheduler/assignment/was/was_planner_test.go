@@ -1828,6 +1828,24 @@ func TestPlan_CommittedVictims(t *testing.T) {
 			},
 			wantTopologyAssignment: onNodes(domain(testNode1, 1)),
 		},
+		"low-priority committed victim is not selected again as a preemption target": {
+			cqQuota: "12",
+			admittedWorkloads: []*kueue.Workload{
+				committed3Node1.Clone().Priority(1).Obj(),
+				committed3Node1.Clone().Name("candidate-1").Priority(10).Obj(),
+				blocker6Node2.Clone().Obj(),
+			},
+			committedVictims: []workload.Reference{
+				workload.NewReference(testNamespace, "committed-victim"),
+			},
+			requestedCPU: "6",
+			initialMode:  flavorassigner.Preempt,
+			wantMode:     flavorassigner.Preempt,
+			wantPreemptionTargets: []workload.Reference{
+				workload.NewReference(testNamespace, "candidate-1"),
+			},
+			wantTopologyAssignment: onNodes(domain(testNode1, 1)),
+		},
 		"committed victim and preemption candidates insufficient: falls back to empty-cluster simulation": {
 			cqQuota: "24",
 			admittedWorkloads: []*kueue.Workload{

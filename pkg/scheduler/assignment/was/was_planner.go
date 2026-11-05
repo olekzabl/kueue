@@ -239,8 +239,17 @@ func (p *wasPlanner) scheduleWithPreemption(
 	assignment flavorassigner.Assignment,
 	committedVictims preemption.PreemptedWorkloads,
 ) (podSetPlacementSummary, podSetFailureSummary, []*preemption.Target, error) {
+	// Here, committed victims are known to be insufficient on their own: either
+	// the initial assignment (computed without them) already required preemption,
+	// or the Fit path failed despite preempting them. So only additional victims
+	// are searched for, and the strategies must see the snapshot with committed
+	// victims already removed, the same as the flavor assigner saw it. This keeps
+	// them out of the preemption candidates and frees their quota, including for
+	// committed victims without Pods, which the simulator cannot preempt.
+	revertCommittedVictimsRemoval := p.snapshot.SimulateWorkloadRemoval(committedVictims.Workloads())
+	defer revertCommittedVictimsRemoval()
+
 	for strategy := range p.preemptor.GetPreemptionStrategyIterator(ctx, *p.wl, p.snapshot, assignment) {
-		strategy.WithCommittedPreemptionVictims(committedVictims)
 		placementSummary, failures, preemptedWorkloads, err := p.schedule(
 			ctx,
 			pods,
@@ -252,11 +261,9 @@ func (p *wasPlanner) scheduleWithPreemption(
 		if err != nil {
 			return nil, nil, nil, err
 		}
-		if len(committedVictims) > 0 {
-			preemptedWorkloads = slices.DeleteFunc(preemptedWorkloads, func(wl workload.Reference) bool {
-				return committedVictims.Has(wl)
-			})
-		}
+		// The simulator reports committed victims among the preempted workloads,
+		// but they are not targets of this preemptor.
+		preemptedWorkloads = slices.DeleteFunc(preemptedWorkloads, committedVictims.Has)
 		if len(failures) == 0 {
 			targets, err := strategy.GetTargets(preemptedWorkloads)
 			if err != nil {

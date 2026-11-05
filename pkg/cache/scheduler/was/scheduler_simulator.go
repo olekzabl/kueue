@@ -228,8 +228,8 @@ func (s *wasSimulator) buildScheduleWorkloadOptions(scheduleOpts *simulator.Sche
 		libOpts.PreemptionFilter = &preemptionFilterAdapter{PreemptionFilter: scheduleOpts.PreemptionFilter}
 	}
 	if !scheduleOpts.SimulateEmpty {
-		// Right now scheduler-library will only be generating candidates with committed victims previously preempted.
-		// This means the potential-victim iterator will never yield committed victims.
+		// Preemption candidates never include committed victims, because the WAS planner
+		// removes committed victims from the Kueue snapshot before generating candidates.
 		libOpts.PotentialVictims = s.potentialVictims(scheduleOpts.PreemptionCandidates)
 		libOpts.CommittedVictims = s.committedVictims(scheduleOpts.CommittedPreemptionVictims)
 	}
